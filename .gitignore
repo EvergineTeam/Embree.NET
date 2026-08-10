@@ -1,0 +1,6 @@
+**/.vs
+**/bin
+**/obj
+
+# Screenshot produced by the Evergine sample at runtime (docs/screenshot.png is the committed one).
+HelloEmbree.Evergine/screenshot.png
