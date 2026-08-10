@@ -67,6 +67,10 @@ float4 PS(PS_IN input) : SV_Target
 		private static double[] uploadMs;
 		private static double[] gpuMs;
 		private static double sceneBuildMs;
+		private static MainForm form;
+		private static bool resizePending;
+		private static bool screenshotRequested;
+		private static float cameraTime;
 
 		[STAThread]
 		private static void Main(string[] args)
@@ -76,17 +80,26 @@ float4 PS(PS_IN input) : SV_Target
 			screenshotPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "screenshot.png");
 			screenshotPath = Path.GetFullPath(screenshotPath);
 
-			var windowSystem = new FormsWindowsSystem();
-			var window = windowSystem.CreateWindow("Embree.NET + Evergine low-level", Width, Height);
+			System.Windows.Forms.Application.EnableVisualStyles();
+			System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+
+			form = new MainForm((int)Width, (int)Height);
+			form.ScreenshotButton.Click += (s, e) => screenshotRequested = true;
+
+			// The HWND must exist before the swapchain is built, and it must be read *after* the
+			// control has been parented: WinForms recreates a control's handle when it is added to
+			// a container, which would leave the swapchain bound to a dead window.
+			form.CreateControl();
+			IntPtr renderHandle = form.RenderControl.Handle;
 
 			graphicsContext = new DX11GraphicsContext();
 			graphicsContext.CreateDevice();
 
 			var swapChainDescription = new SwapChainDescription()
 			{
-				Width = window.Width,
-				Height = window.Height,
-				SurfaceInfo = window.SurfaceInfo,
+				Width = (uint)form.RenderControl.ClientSize.Width,
+				Height = (uint)form.RenderControl.ClientSize.Height,
+				SurfaceInfo = new SurfaceInfo(renderHandle, SurfaceInfo.SurfaceTypes.Forms),
 				ColorTargetFormat = Evergine.Common.Graphics.PixelFormat.R8G8B8A8_UNorm,
 				ColorTargetFlags = TextureFlags.RenderTarget | TextureFlags.ShaderResource,
 				DepthStencilTargetFormat = Evergine.Common.Graphics.PixelFormat.D24_UNorm_S8_UInt,
@@ -101,7 +114,30 @@ float4 PS(PS_IN input) : SV_Target
 			// VSync would clamp the measured frame time to the display refresh rate.
 			swapChain.VerticalSync = !benchmark;
 
+			form.RenderControl.ClientSizeChanged += (s, e) => resizePending = true;
+
+			// Drive the render loop from the form itself, so it ends when the window is closed.
+			var windowSystem = new FormsWindowsSystem { AutoRegisterWindow = false };
+			windowSystem.RegisterLoopThreadControl(form);
 			windowSystem.Run(Load, Draw);
+		}
+
+		/// <summary>
+		/// Matches the swapchain to the current size of the hosting control. The ray traced image
+		/// keeps its own fixed resolution and is stretched by the fullscreen triangle, so resizing
+		/// costs nothing on the CPU side.
+		/// </summary>
+		private static void ApplyPendingResize()
+		{
+			resizePending = false;
+
+			uint width = (uint)Math.Max(form.RenderControl.ClientSize.Width, 1);
+			uint height = (uint)Math.Max(form.RenderControl.ClientSize.Height, 1);
+
+			swapChain.ResizeSwapChain(width, height);
+
+			viewports[0] = new Viewport(0, 0, width, height);
+			scissors[0] = new Evergine.Mathematics.Rectangle(0, 0, (int)width, (int)height);
 		}
 
 		private static void Load()
@@ -134,7 +170,8 @@ float4 PS(PS_IN input) : SV_Target
 			};
 			rayTexture = graphicsContext.Factory.CreateTexture(ref textureDescription);
 
-			var samplerDescription = SamplerStates.PointClamp;
+			// Linear so the fixed-resolution ray traced image scales cleanly when the window is resized.
+			var samplerDescription = SamplerStates.LinearClamp;
 			var sampler = graphicsContext.Factory.CreateSamplerState(ref samplerDescription);
 
 			var vertexShaderDescription = new ShaderDescription(
@@ -176,15 +213,29 @@ float4 PS(PS_IN input) : SV_Target
 
 			viewports = new[] { new Viewport(0, 0, Width, Height) };
 			scissors = new[] { new Evergine.Mathematics.Rectangle(0, 0, (int)Width, (int)Height) };
+
+			form.SetSceneInfo(raytracer.TriangleCount, raytracer.GeometryCount, (int)Width, (int)Height);
+			ApplyPendingResize();
 		}
 
 		private static void Draw()
 		{
+			if (resizePending)
+			{
+				ApplyPendingResize();
+			}
+
 			swapChain.InitFrame();
+
+			// The camera is frozen while benchmarking so every frame traces the same image.
+			if (!benchmark && !form.AnimateButton.Checked)
+			{
+				cameraTime = (float)clock.Elapsed.TotalSeconds;
+			}
 
 			// 1. CPU ray tracing with Embree.
 			long t0 = Stopwatch.GetTimestamp();
-			raytracer.Render(pixels, (int)Width, (int)Height, benchmark ? 0.0f : (float)clock.Elapsed.TotalSeconds);
+			raytracer.Render(pixels, (int)Width, (int)Height, cameraTime);
 			long t1 = Stopwatch.GetTimestamp();
 
 			// 2. Upload to the GPU texture.
@@ -234,8 +285,11 @@ float4 PS(PS_IN input) : SV_Target
 				return;
 			}
 
-			if (frameIndex == ScreenshotFrame)
+			form.SetTimings(ToMilliseconds(t1 - t0), ToMilliseconds(t2 - t1), ToMilliseconds(t3 - t2));
+
+			if (frameIndex == ScreenshotFrame || screenshotRequested)
 			{
+				screenshotRequested = false;
 				SaveScreenshot();
 
 				if (exitAfterScreenshot)
@@ -305,6 +359,10 @@ float4 PS(PS_IN input) : SV_Target
 		{
 			Texture source = swapChain.FrameBuffer.ColorTargets[0].Texture;
 
+			// The swapchain follows the control size, which is not the ray tracing resolution.
+			int width = (int)source.Description.Width;
+			int height = (int)source.Description.Height;
+
 			var stagingDescription = source.Description;
 			stagingDescription.Flags = TextureFlags.None;
 			stagingDescription.CpuAccess = ResourceCpuAccess.Read;
@@ -323,20 +381,20 @@ float4 PS(PS_IN input) : SV_Target
 
 			try
 			{
-				using var bitmap = new System.Drawing.Bitmap((int)Width, (int)Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+				using var bitmap = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
 				var bitmapData = bitmap.LockBits(
-					new System.Drawing.Rectangle(0, 0, (int)Width, (int)Height),
+					new System.Drawing.Rectangle(0, 0, width, height),
 					System.Drawing.Imaging.ImageLockMode.WriteOnly,
 					System.Drawing.Imaging.PixelFormat.Format32bppArgb);
 
 				try
 				{
-					for (int y = 0; y < Height; y++)
+					for (int y = 0; y < height; y++)
 					{
 						byte* sourceRow = (byte*)mapped.Data + (y * mapped.RowPitch);
 						byte* destinationRow = (byte*)bitmapData.Scan0 + (y * bitmapData.Stride);
 
-						for (int x = 0; x < Width; x++)
+						for (int x = 0; x < width; x++)
 						{
 							// Swapchain is RGBA, GDI+ expects BGRA.
 							destinationRow[(x * 4) + 0] = sourceRow[(x * 4) + 2];

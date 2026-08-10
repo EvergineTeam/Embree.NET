@@ -74,9 +74,10 @@ HelloEmbree.Evergine/          CPU ray tracer drawn with the Evergine low-level 
 
 [HelloEmbree.Evergine](HelloEmbree.Evergine/README.md) traces a small scene on the CPU with
 `rtcIntersect1`/`rtcOccluded1`, uploads the result to a texture every frame and blits it to a
-DX11 swapchain. It also has a `--bench` mode that reports the cost of each stage.
+DX11 swapchain hosted in a Windows Forms window. It also has a `--bench` mode that reports the
+cost of each stage.
 
-![Ray traced scene](HelloEmbree.Evergine/docs/screenshot.png)
+![The Evergine sample running](HelloEmbree.Evergine/docs/window.png)
 
 Regenerate the bindings after changing a header with:
 

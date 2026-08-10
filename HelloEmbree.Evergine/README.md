@@ -2,9 +2,36 @@
 
 CPU ray tracing with `Evergine.Bindings.Embree`, presented through the **Evergine low-level
 graphics API** — no Evergine Framework, no scene graph, just `GraphicsContext`, `SwapChain`,
-`CommandQueue` and a fullscreen triangle.
+`CommandQueue` and a fullscreen triangle — inside a plain **Windows Forms** window.
 
-![Ray traced scene](docs/screenshot.png)
+![The sample running](docs/window.png)
+
+## Hosting inside a WinForms window
+
+`MainForm` is an ordinary `Form` with a toolbar and a status bar. Evergine renders into an
+[`EvergineControl`](https://github.com/EvergineTeam/Evergine.Public) docked in the middle of it,
+so the ray traced image participates in a normal WinForms layout:
+
+```csharp
+form.CreateControl();                                  // realize the HWND first
+var surfaceInfo = new SurfaceInfo(form.RenderControl.Handle, SurfaceInfo.SurfaceTypes.Forms);
+// ... swapChainDescription.SurfaceInfo = surfaceInfo ...
+
+var windowSystem = new FormsWindowsSystem { AutoRegisterWindow = false };
+windowSystem.RegisterLoopThreadControl(form);          // loop ends when the form closes
+windowSystem.Run(Load, Draw);
+```
+
+Two details matter here:
+
+- The HWND has to be read **after** the control is parented. WinForms recreates a control's
+  handle when it is added to a container, which would leave the swapchain bound to a dead window.
+- `AutoRegisterWindow = false` stops `FormsWindowsSystem` from creating its own window;
+  `RegisterLoopThreadControl(form)` points the render loop at our form instead.
+
+The status bar shows the live per-stage cost, the toolbar can freeze the camera and write a PNG.
+Resizing the window only resizes the swapchain — the ray traced image keeps its own fixed
+resolution and is stretched by the fullscreen triangle, so resizing costs nothing on the CPU.
 
 ## What it does
 
@@ -44,7 +71,7 @@ Options:
 
 | Flag | Effect |
 |---|---|
-| *(none)* | Opens the window, camera orbits the scene, writes `screenshot.png` at frame 10 |
+| *(none)* | Opens the window, camera orbits the scene, writes `screenshot.png` at frame 10 and on demand from the toolbar |
 | `--exit` | Same, but closes right after the screenshot |
 | `--bench` | Disables VSync, discards 20 warm-up frames, times 100 frames and prints a breakdown |
 
