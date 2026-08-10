@@ -5,7 +5,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
-namespace HelloEmbreeEvergine
+namespace HelloEmbree
 {
 	/// <summary>
 	/// CPU ray tracer built on Embree: primary rays with rtcIntersect1, hard shadows with

@@ -6,7 +6,7 @@
 		<UseWindowsForms>true</UseWindowsForms>
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 		<Nullable>disable</Nullable>
-		<RootNamespace>HelloEmbreeEvergine</RootNamespace>
+		<RootNamespace>HelloEmbree</RootNamespace>
 	</PropertyGroup>
 
 	<ItemGroup>

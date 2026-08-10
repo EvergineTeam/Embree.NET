@@ -6,7 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
-namespace HelloEmbreeEvergine
+namespace HelloEmbree
 {
 	/// <summary>
 	/// Renders an Embree CPU-raytraced scene through the Evergine low-level graphics API:
