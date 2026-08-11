@@ -75,6 +75,7 @@ jobs:
       - name: Configure
         shell: bash
         run: |
+          set -o pipefail
           cmake -S . -B build \
             ${{ matrix.cmake-arch && format('-A {0}', matrix.cmake-arch) || '' }} \
             -DCMAKE_BUILD_TYPE=Release \
@@ -83,14 +84,21 @@ jobs:
             -DEMBREE_TUTORIALS=OFF \
             -DEMBREE_STATIC_LIB=OFF \
             -DEMBREE_GEOMETRY_INSTANCE_ARRAY=ON \
-            -DEMBREE_MAX_ISA=${{ matrix.max-isa }}
+            -DEMBREE_MAX_ISA=${{ matrix.max-isa }} 2>&1 | tee configure.log
 
-      # Fail early and loudly if the ARM legs did not end up on the ARM code path: an x86
-      # SIMD build for an ARM target dies deep in the compiler with an unhelpful error.
+      # Fail early and loudly if an ARM leg did not end up on the ARM code path: an x86 SIMD
+      # build for an ARM target dies deep inside immintrin.h with an error that says nothing
+      # about the real cause.
+      #
+      # This greps Embree's own configure output rather than CMakeCache.txt. EMBREE_ARM is a
+      # plain variable set with SET(), not a cache entry, so it never reaches the cache file
+      # and an assertion against it fails on a perfectly good build.
       - name: Check ARM detection
         if: matrix.max-isa == 'NEON'
         shell: bash
-        run: grep -q "EMBREE_ARM:.*=ON" build/CMakeCache.txt || (echo "EMBREE_ARM is not ON; CMake did not detect an ARM target" && grep -i "CMAKE_.*PROCESSOR\|CMAKE_GENERATOR_PLATFORM" build/CMakeCache.txt && exit 1)
+        run: |
+          grep -qE "Building for (AArch64|Apple silicon)" configure.log \
+            || { echo "CMake did not take Embree's ARM path:"; grep -iE "Building for|CMAKE_GENERATOR_PLATFORM" configure.log; exit 1; }
 
       - name: Build
         run: cmake --build build --config Release --parallel ${{ matrix.parallel }}
