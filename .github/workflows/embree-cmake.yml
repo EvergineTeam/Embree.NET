@@ -54,17 +54,20 @@ jobs:
             max-isa: AVX2
             cmake-arch: x64
             parallel: 4
-          # clang-cl rather than the MSVC toolset. Embree gates its ARM code path on
-          # __ARM_NEON and __aarch64__, which are GCC/Clang predefines; MSVC defines neither
-          # on ARM64 (it defines _M_ARM64), so it falls through to the x86 branch of
-          # common/sys/intrinsics.h and pulls in immintrin.h, which then rejects the target.
-          # Configuring correctly is not enough — that failure happens at compile time.
-          - os: windows-11-arm
-            rid: win-arm64
-            max-isa: NEON
-            cmake-arch: ARM64
-            toolset: ClangCL
-            parallel: 4
+          # There is no win-arm64 leg. Embree 4.4.1 does not build for Windows on ARM with
+          # either toolset available on the runner, and the two failures are different walls:
+          #
+          #   MSVC     — Embree gates its ARM path on __ARM_NEON and __aarch64__, GCC/Clang
+          #              predefines that MSVC does not define on ARM64, so
+          #              common/sys/intrinsics.h takes its x86 branch and includes
+          #              immintrin.h, which rejects the target.
+          #   clang-cl — clears that wall, then Embree's own CMake feeds -msse2 to an
+          #              arm64-pc-windows-msvc target and clang-cl refuses it.
+          #
+          # Both are upstream gaps in a configuration Embree neither supports nor tests.
+          # Getting past the second would mean patching Embree's CMake and carrying that
+          # patch, for a ray tracing kernel where a wrong SIMD path gives wrong intersections
+          # rather than a crash. See the tracking issue before trying again.
           - os: macos-latest
             rid: osx-arm64
             max-isa: NEON
