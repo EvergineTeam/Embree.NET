@@ -19,6 +19,11 @@ on:
         required: false
         type: string
         default: 'v4.4.1'
+      only-rid:
+        description: 'Build a single RID (e.g. win-arm64). Empty builds all five.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -27,55 +32,101 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `parallel` is the compiler job count. An x64 build compiles the kernels once per
+          # ISA (SSE2, SSE4.2, AVX, AVX2) and Embree's templated translation units are heavy:
+          # four concurrent g++ processes exhaust the 16 GB of a standard runner and the OOM
+          # killer takes the runner down with them, which surfaces as a job that dies after
+          # 47 minutes with no logs at all rather than as a compiler error. The NEON legs
+          # build a single ISA and have room to spare.
           - os: ubuntu-24.04
             rid: linux-x64
             max-isa: AVX2
+            parallel: 2
           - os: ubuntu-24.04-arm
             rid: linux-arm64
             max-isa: NEON
+            parallel: 4
+          # `cmake-arch` feeds the Visual Studio generator's -A flag. Without it CMake picks
+          # the generator's default platform, which on the ARM64 runner is not ARM64: the
+          # build then compiled the x86 SIMD paths and immintrin.h rejected the target.
           - os: windows-latest
             rid: win-x64
             max-isa: AVX2
-          - os: windows-11-arm
-            rid: win-arm64
-            max-isa: NEON
+            cmake-arch: x64
+            parallel: 4
+          # There is no win-arm64 leg. Embree 4.4.1 does not build for Windows on ARM with
+          # either toolset available on the runner, and the two failures are different walls:
+          #
+          #   MSVC     — Embree gates its ARM path on __ARM_NEON and __aarch64__, GCC/Clang
+          #              predefines that MSVC does not define on ARM64, so
+          #              common/sys/intrinsics.h takes its x86 branch and includes
+          #              immintrin.h, which rejects the target.
+          #   clang-cl — clears that wall, then Embree's own CMake feeds -msse2 to an
+          #              arm64-pc-windows-msvc target and clang-cl refuses it.
+          #
+          # Both are upstream gaps in a configuration Embree neither supports nor tests.
+          # Getting past the second would mean patching Embree's CMake and carrying that
+          # patch, for a ray tracing kernel where a wrong SIMD path gives wrong intersections
+          # rather than a crash. See the tracking issue before trying again.
           - os: macos-latest
             rid: osx-arm64
             max-isa: NEON
+            parallel: 4
 
     steps:
       - name: Checkout Embree
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         uses: actions/checkout@v4
         with:
           repository: RenderKit/embree
           ref: ${{ inputs.embree-ref || 'v4.4.1' }}
 
       - name: Install build dependencies (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
+        if: (inputs.only-rid == '' || inputs.only-rid == matrix.rid) && startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
 
       - name: Configure
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         shell: bash
         run: |
+          set -o pipefail
           cmake -S . -B build \
+            ${{ matrix.cmake-arch && format('-A {0}', matrix.cmake-arch) || '' }} \
+            ${{ matrix.toolset && format('-T {0}', matrix.toolset) || '' }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DEMBREE_TASKING_SYSTEM=INTERNAL \
             -DEMBREE_ISPC_SUPPORT=OFF \
             -DEMBREE_TUTORIALS=OFF \
             -DEMBREE_STATIC_LIB=OFF \
             -DEMBREE_GEOMETRY_INSTANCE_ARRAY=ON \
-            -DEMBREE_MAX_ISA=${{ matrix.max-isa }}
+            -DEMBREE_MAX_ISA=${{ matrix.max-isa }} 2>&1 | tee configure.log
+
+      # Fail early and loudly if an ARM leg did not end up on the ARM code path: an x86 SIMD
+      # build for an ARM target dies deep inside immintrin.h with an error that says nothing
+      # about the real cause.
+      #
+      # This greps Embree's own configure output rather than CMakeCache.txt. EMBREE_ARM is a
+      # plain variable set with SET(), not a cache entry, so it never reaches the cache file
+      # and an assertion against it fails on a perfectly good build.
+      - name: Check ARM detection
+        if: (inputs.only-rid == '' || inputs.only-rid == matrix.rid) && matrix.max-isa == 'NEON'
+        shell: bash
+        run: |
+          grep -qE "Building for (AArch64|Apple silicon)" configure.log \
+            || { echo "CMake did not take Embree's ARM path:"; grep -iE "Building for|CMAKE_GENERATOR_PLATFORM" configure.log; exit 1; }
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
+        run: cmake --build build --config Release --parallel ${{ matrix.parallel }}
 
       # On Linux and macOS CMake emits versioned names behind symlinks
       # (libembree4.so -> libembree4.so.4 -> libembree4.so.4.4.1). Symlinks do not survive
       # NuGet packaging, so the real file is copied out under the plain name that
       # [DllImport("embree4")] probes for.
       - name: Collect artifacts
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         shell: bash
         run: |
           set -euo pipefail
@@ -97,6 +148,7 @@ jobs:
           ls -l out
 
       - name: Upload
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         uses: actions/upload-artifact@v4
         with:
           name: embree-${{ matrix.rid }}

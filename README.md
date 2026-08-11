@@ -39,9 +39,13 @@ CPU ray tracing, lightmap baking, ambient occlusion and general geometric querie
 
 ## Supported Platforms
 
-- [x] Windows x64, ARM64
+- [x] Windows x64
 - [x] Linux x64, ARM64
 - [x] MacOS ARM64
+- [ ] Windows ARM64 — Embree 4.4.1 does not build for this target with either toolset on the
+  runner: MSVC does not define the `__ARM_NEON`/`__aarch64__` macros Embree gates its ARM path
+  on, and clang-cl gets past that only to be handed `-msse2` for an ARM64 target by Embree's
+  own CMake. Both are upstream gaps.
 
 ## Usage notes
 
