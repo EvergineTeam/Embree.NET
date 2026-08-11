@@ -28,9 +28,6 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    # A single leg can be rebuilt on its own. Iterating on one platform otherwise means
-    # re-running win-x64, which takes an hour compiling four ISAs with MSVC.
-    if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
     strategy:
       fail-fast: false
       matrix:
@@ -75,18 +72,20 @@ jobs:
 
     steps:
       - name: Checkout Embree
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         uses: actions/checkout@v4
         with:
           repository: RenderKit/embree
           ref: ${{ inputs.embree-ref || 'v4.4.1' }}
 
       - name: Install build dependencies (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
+        if: (inputs.only-rid == '' || inputs.only-rid == matrix.rid) && startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake
 
       - name: Configure
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         shell: bash
         run: |
           set -o pipefail
@@ -109,13 +108,14 @@ jobs:
       # plain variable set with SET(), not a cache entry, so it never reaches the cache file
       # and an assertion against it fails on a perfectly good build.
       - name: Check ARM detection
-        if: matrix.max-isa == 'NEON'
+        if: (inputs.only-rid == '' || inputs.only-rid == matrix.rid) && matrix.max-isa == 'NEON'
         shell: bash
         run: |
           grep -qE "Building for (AArch64|Apple silicon)" configure.log \
             || { echo "CMake did not take Embree's ARM path:"; grep -iE "Building for|CMAKE_GENERATOR_PLATFORM" configure.log; exit 1; }
 
       - name: Build
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         run: cmake --build build --config Release --parallel ${{ matrix.parallel }}
 
       # On Linux and macOS CMake emits versioned names behind symlinks
@@ -123,6 +123,7 @@ jobs:
       # NuGet packaging, so the real file is copied out under the plain name that
       # [DllImport("embree4")] probes for.
       - name: Collect artifacts
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         shell: bash
         run: |
           set -euo pipefail
@@ -144,6 +145,7 @@ jobs:
           ls -l out
 
       - name: Upload
+        if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         uses: actions/upload-artifact@v4
         with:
           name: embree-${{ matrix.rid }}
