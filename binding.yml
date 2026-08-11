@@ -1,0 +1,61 @@
+# Binding manifest — see https://github.com/EvergineTeam/Evergine.Bindings
+# Schema: https://github.com/EvergineTeam/Evergine.Bindings/blob/main/binding.schema.json
+toolbox: 1.29.0
+
+package:
+  id: Evergine.Bindings.Embree
+  project: Evergine.Bindings.Embree/Evergine.Bindings.Embree.csproj
+  target-framework: net10.0
+  # linux-x64, unlike most bindings in the fleet. The CppAst generator parses against the
+  # stub system headers in EmbreeGen/Headers/stubs against a pinned x86_64 target, so it
+  # does not depend on the libclang include paths that force MeshOptimizer, RenderDoc and
+  # KTX to generate on Windows. Do not "fix" this by moving it to windows-latest.
+  runtime-identifier: linux-x64
+
+upstream:
+  kind: git-tree
+  language: cpp
+  project: https://github.com/RenderKit/embree
+  version-from: git-release
+
+  release:
+    # Tagged releases, not main. This binding ships native binaries, and the headers and
+    # those binaries have to come from one revision of Embree; a branch would move the
+    # headers underneath libraries built from something else. `current` is rewritten by
+    # binding-fetch-upstream when it brings in a newer release, which makes this the one
+    # place the version lives.
+    track: stable
+    current: v4.4.1
+
+  sources:
+    - repo: RenderKit/embree
+      remote-path: include/embree4
+      path: EmbreeGen/Headers/embree4
+      format: c-header
+
+generator:
+  project: EmbreeGen/EmbreeGen.csproj
+  name: EmbreeGen
+  output:
+    - Evergine.Bindings.Embree/Generated
+
+# NOTE — rtcore_config.h is not part of the upstream sources above. Embree's CMake generates
+# it, and it decides the layout of several public structs: RTC_MAX_INSTANCE_LEVEL_COUNT sizes
+# the instID arrays in RTCHit and RTCRayQueryContext, RTC_GEOMETRY_INSTANCE_ARRAY adds the
+# instPrimID ones, and RTC_MIN_WIDTH adds a field to RTCIntersectArguments. The copy vendored
+# in EmbreeGen/Headers/embree4/ therefore has to come from the same build as the binaries, and
+# it does: embree-cmake.yml emits it alongside them. Refreshing the header tree leaves it
+# alone, because the git-tree adapter only writes the files it fetched.
+#
+# NOTE — this package ships native binaries under Evergine.Bindings.Embree/runtimes. Headers
+# and binaries must come from the same upstream revision, so a header bump is only valid
+# together with a native rebuild. That rebuild is not optional and CI would not catch it being
+# skipped: P/Invoke binds late, so a mismatched package compiles, passes CI, publishes, and
+# then throws in the consumer's application. The CD keeps the two in step — embree-cmake.yml
+# rebuilds every platform at the resolved release before the headers are committed. Do not
+# bump the header by hand.
+#
+# NOTE — there is no win-arm64. Embree 4.4.1 does not build for Windows on ARM with either
+# toolset available on the runner; see the tracking issue. Do not add the RID back without a
+# green build, and do not ship a binary produced by forcing flags past Embree's CMake: a wrong
+# SIMD path in a ray tracing kernel returns wrong intersections rather than crashing.

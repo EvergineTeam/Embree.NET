@@ -12,15 +12,24 @@
 name: Build Embree Libraries
 
 on:
+  # Called by CD.yml with the release that `binding-resolve-upstream` settled on, so the
+  # binaries and the headers committed in the same run come from one revision of Embree.
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Embree tag to build'
+        required: false
+        type: string
+        default: 'v4.4.1'
   workflow_dispatch:
     inputs:
-      embree-ref:
+      ref:
         description: 'Embree tag to build'
         required: false
         type: string
         default: 'v4.4.1'
       only-rid:
-        description: 'Build a single RID (e.g. win-arm64). Empty builds all five.'
+        description: 'Build a single RID (e.g. linux-arm64). Empty builds all four.'
         required: false
         type: string
         default: ''
@@ -79,7 +88,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: RenderKit/embree
-          ref: ${{ inputs.embree-ref || 'v4.4.1' }}
+          ref: ${{ inputs.ref || 'v4.4.1' }}
 
       - name: Install build dependencies (Linux)
         if: (inputs.only-rid == '' || inputs.only-rid == matrix.rid) && startsWith(matrix.os, 'ubuntu')
@@ -121,6 +130,9 @@ jobs:
         if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         run: cmake --build build --config Release --parallel ${{ matrix.parallel }}
 
+      # Each artifact is laid out with the paths it will occupy in the repository, so the CD
+      # unpacks it over the tree and that is the whole mapping.
+      #
       # On Linux and macOS CMake emits versioned names behind symlinks
       # (libembree4.so -> libembree4.so.4 -> libembree4.so.4.4.1). Symlinks do not survive
       # NuGet packaging, so the real file is copied out under the plain name that
@@ -130,26 +142,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out
+          native="out/Evergine.Bindings.Embree/runtimes/${{ matrix.rid }}/native"
+          mkdir -p "$native"
 
           case "${{ matrix.rid }}" in
             win-*)
-              cp "$(find build -name 'embree4.dll' -print -quit)" out/embree4.dll
+              cp "$(find build -name 'embree4.dll' -print -quit)" "$native/embree4.dll"
               ;;
             linux-*)
-              cp "$(readlink -f "$(find build -name 'libembree4.so*' -print -quit)")" out/libembree4.so
+              cp "$(readlink -f "$(find build -name 'libembree4.so*' -print -quit)")" "$native/libembree4.so"
               ;;
             osx-*)
-              cp "$(readlink -f "$(find build -name 'libembree4*.dylib' -print -quit)")" out/libembree4.dylib
+              cp "$(readlink -f "$(find build -name 'libembree4*.dylib' -print -quit)")" "$native/libembree4.dylib"
               ;;
           esac
 
-          cp include/embree4/rtcore_config.h out/
-          ls -l out
+          # rtcore_config.h comes from one leg only. Every leg generates a byte-identical
+          # file, but the Windows one is written with CRLF, so letting them all contribute
+          # would make the committed header flip line endings depending on unpack order.
+          if [ "${{ matrix.rid }}" = "linux-x64" ]; then
+            mkdir -p out/EmbreeGen/Headers/embree4
+            cp include/embree4/rtcore_config.h out/EmbreeGen/Headers/embree4/rtcore_config.h
+          fi
+
+          find out -type f
 
       - name: Upload
         if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
         uses: actions/upload-artifact@v4
         with:
-          name: embree-${{ matrix.rid }}
+          name: natives-${{ matrix.rid }}
           path: out/
