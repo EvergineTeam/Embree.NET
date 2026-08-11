@@ -1,0 +1,6 @@
+**/.vs
+**/bin
+**/obj
+
+# Screenshot produced by the sample at runtime (docs/ holds the committed ones).
+HelloEmbree/screenshot.png
