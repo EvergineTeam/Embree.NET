@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+		<Nullable>disable</Nullable>
+		<Optimize>true</Optimize>
+		<ServerGarbageCollection>true</ServerGarbageCollection>
+		<RootNamespace>OcclusionCulling</RootNamespace>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Evergine.Bindings.Embree\Evergine.Bindings.Embree.csproj" />
+	</ItemGroup>
+
+</Project>

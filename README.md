@@ -74,7 +74,13 @@ binding.yml                    Manifest read by the Evergine.Bindings toolbox
 EmbreeGen/                     Generator console app (CppAst); vendored headers in Headers/
 Evergine.Bindings.Embree/      The NuGet package: Generated/ bindings + runtimes/ natives
 HelloEmbree/                   Sample: CPU ray tracer drawn with the Evergine low-level API
+OcclusionCulling/              Sample: what a CPU occlusion culling pass costs
 ```
+
+[OcclusionCulling](OcclusionCulling/README.md) measures a visibility pass over a thousand boxes
+two ways — per-object rays and a visibility buffer — each with single rays and 8-wide packets,
+and reports both the cost and how much of the screen each one gets wrong. It is a console app
+with no dependencies, so unlike `HelloEmbree` it runs on every RID this package ships.
 
 CI and CD are the shared workflows from
 [EvergineTeam/Evergine.Bindings](https://github.com/EvergineTeam/Evergine.Bindings), and
