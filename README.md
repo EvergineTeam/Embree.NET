@@ -99,3 +99,4 @@ fails loudly instead of corrupting memory.
 - [Meshoptimizer.NET](https://github.com/EvergineTeam/Meshoptimizer.NET) — Bindings for meshoptimizer
 - [RenderDoc.NET](https://github.com/EvergineTeam/RenderDoc.NET) — Bindings for RenderDoc
 - [XAtlas.NET](https://github.com/EvergineTeam/XAtlas.NET) — Bindings for xatlas
+- [MuJoCo.NET](https://github.com/EvergineTeam/MuJoCo.NET) — Bindings for MuJoCo
