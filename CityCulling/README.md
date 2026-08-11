@@ -46,6 +46,46 @@ From above, with the camera in amber and its two frustum edges. The kept objects
 wedge just in front of the camera; everything beyond the first row of facades is red. That
 narrow wedge is what 94% culling looks like.
 
+## What it costs, across a full orbit
+
+`--bench` turns VSync off and sweeps a full circle in 360 steps, so the numbers cover every
+direction the camera can face rather than whichever ones an animation happened to land on.
+
+```
+                        min     median       mean        max
+culling               0.306      0.422      0.437      0.816  ms
+whole frame           0.533      0.696      0.705      2.050  ms
+draw calls                2         36         35         75
+```
+
+**The culling costs 0.42 ms, which is 2.5% of a 16.6 ms frame at 60 Hz**, and it removes 964
+draw calls.
+
+## And it does not pay for itself here
+
+`--bench --no-cull` skips the occlusion pass and draws everything:
+
+```
+                        min     median       mean        max
+culling               0.117      0.123      0.129      0.247  ms   (frustum only)
+whole frame           0.418      0.589      0.635      1.369  ms
+draw calls            1,001      1,001       1001      1,001
+```
+
+The frame is **faster without the occlusion pass**: 0.59 ms against 0.70 ms. Taking the culling
+out of both, 1,001 draw calls of this geometry cost 0.47 ms and 36 cost 0.27 ms — so the pass
+spends 0.30 ms of CPU to save 0.19 ms of drawing, and loses 0.11 ms on the deal.
+
+That is not a defect in the culling, it is the scene. These are boxes and cones of a couple of
+dozen triangles with a two-line shader; there is almost nothing to save by not drawing one. The
+pass breaks even when an average object costs about 0.3 µs more than it does here, and wins
+comfortably beyond that — which is to say, with real meshes, real materials and real overdraw.
+The 0.42 ms is what the technique costs; whether it is worth paying depends entirely on what a
+draw call costs you.
+
+Worth knowing before wiring this into an engine, and worth measuring there rather than trusting
+this number.
+
 ## Things worth knowing before copying this
 
 **Evergine's depth is reversed.** `DepthStencilStates.ReadWrite` compares `GreaterEqual` and

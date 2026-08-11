@@ -45,11 +45,19 @@ namespace CityCulling
 		private static bool exitAfterCapture;
 		private static string outputDirectory;
 		private static int lastCandidateCount;
+		private static bool benchmark;
+		private static bool noCull;
+		private static int benchFrame;
+		private static readonly System.Collections.Generic.List<double> BenchCull = new();
+		private static readonly System.Collections.Generic.List<double> BenchFrame = new();
+		private static readonly System.Collections.Generic.List<int> BenchVisible = new();
 		private static double lastMissedScreen;
 
 		[STAThread]
 		private static int Main(string[] args)
 		{
+			benchmark = args.Contains("--bench");
+			noCull = args.Contains("--no-cull");
 			bool capture = args.Contains("--capture");
 			exitAfterCapture = args.Contains("--exit");
 			captureRequested = capture;
@@ -81,7 +89,8 @@ namespace CityCulling
 			};
 
 			swapChain = graphicsContext.CreateSwapChain(swapChainDescription);
-			swapChain.VerticalSync = true;
+			// VSync would clamp every frame to the refresh rate and hide what the culling costs.
+			swapChain.VerticalSync = !benchmark;
 
 			var windowSystem = new FormsWindowsSystem { AutoRegisterWindow = false };
 			windowSystem.RegisterLoopThreadControl(form);
@@ -111,7 +120,13 @@ namespace CityCulling
 		{
 			long frameStart = Stopwatch.GetTimestamp();
 
-			if (!form.PauseButton.Checked && !captureRequested)
+			if (benchmark)
+			{
+				// A full orbit in fixed steps, so the sweep covers every direction the camera can
+				// face rather than whichever ones a wall-clock animation happened to land on.
+				cameraAngle = CaptureAngle + ((float)benchFrame / BenchFrames * MathF.Tau);
+			}
+			else if (!form.PauseButton.Checked && !captureRequested)
 			{
 				cameraAngle = CaptureAngle + ((float)clock.Elapsed.TotalSeconds * 0.16f);
 			}
@@ -126,7 +141,17 @@ namespace CityCulling
 			long cullStart = Stopwatch.GetTimestamp();
 			int candidateCount = Culling.Frustum(city, camera, candidates);
 			lastCandidateCount = candidateCount;
-			Culling.Occlusion(city, camera, candidates, candidateCount, visible);
+
+			if (noCull)
+			{
+				// The counterfactual: draw everything and pay for it on the GPU instead.
+				Array.Fill(visible, true);
+			}
+			else
+			{
+				Culling.Occlusion(city, camera, candidates, candidateCount, visible);
+			}
+
 			double cullMs = Milliseconds(Stopwatch.GetTimestamp() - cullStart);
 
 			swapChain.InitFrame();
@@ -160,7 +185,27 @@ namespace CityCulling
 
 			swapChain.Present();
 
-			form.SetFrameInfo(drawn, city.Count + 1, cullMs, Milliseconds(Stopwatch.GetTimestamp() - frameStart));
+			double frameMs = Milliseconds(Stopwatch.GetTimestamp() - frameStart);
+			form.SetFrameInfo(drawn, city.Count + 1, cullMs, frameMs);
+
+			if (benchmark)
+			{
+				benchFrame++;
+
+				// The first frames pay JIT and driver warm-up.
+				if (benchFrame > BenchWarmup)
+				{
+					BenchCull.Add(cullMs);
+					BenchFrame.Add(frameMs);
+					BenchVisible.Add(drawn);
+				}
+
+				if (benchFrame >= BenchWarmup + BenchFrames)
+				{
+					ReportBenchmark();
+					Environment.Exit(0);
+				}
+			}
 		}
 
 		/// <summary>
@@ -198,6 +243,37 @@ namespace CityCulling
 		}
 
 		private static double Milliseconds(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
+
+		private const int BenchWarmup = 30;
+		private const int BenchFrames = 360;   // one full orbit, one degree at a time
+
+		/// <summary>
+		/// What the culling costs across a full orbit, and what share of a 60 Hz frame that is.
+		/// </summary>
+		private static void ReportBenchmark()
+		{
+			var cull = BenchCull.ToArray();
+			var frame = BenchFrame.ToArray();
+			var drawn = BenchVisible.ToArray();
+			Array.Sort(cull);
+			Array.Sort(frame);
+			Array.Sort(drawn);
+
+			double medianCull = cull[cull.Length / 2];
+
+			Console.WriteLine();
+			Console.WriteLine($"{city.Count:N0} objects, {BenchFrames} frames over a full orbit, VSync off{(noCull ? ", occlusion culling OFF" : string.Empty)}");
+			Console.WriteLine();
+			Console.WriteLine("                        min     median       mean        max");
+			Console.WriteLine($"culling            {cull[0],8:F3} {medianCull,10:F3} {cull.Average(),10:F3} {cull[^1],10:F3}  ms");
+			Console.WriteLine($"whole frame        {frame[0],8:F3} {frame[frame.Length / 2],10:F3} {frame.Average(),10:F3} {frame[^1],10:F3}  ms");
+			Console.WriteLine($"draw calls         {drawn[0],8:N0} {drawn[drawn.Length / 2],10:N0} {drawn.Average(),10:F0} {drawn[^1],10:N0}");
+			Console.WriteLine();
+			if (!noCull)
+			{
+				Console.WriteLine($"Culling is {100.0 * medianCull / 16.6:F1}% of a 16.6 ms frame at 60 Hz ({medianCull:F2} ms of budget spent to avoid {city.Count - drawn[drawn.Length / 2]:N0} draw calls).");
+			}
+		}
 
 		/// <summary>
 		/// Three views of the same frame: what was drawn, what was thrown away, and the whole
