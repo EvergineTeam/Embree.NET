@@ -27,21 +27,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `parallel` is the compiler job count. An x64 build compiles the kernels once per
+          # ISA (SSE2, SSE4.2, AVX, AVX2) and Embree's templated translation units are heavy:
+          # four concurrent g++ processes exhaust the 16 GB of a standard runner and the OOM
+          # killer takes the runner down with them, which surfaces as a job that dies after
+          # 47 minutes with no logs at all rather than as a compiler error. The NEON legs
+          # build a single ISA and have room to spare.
           - os: ubuntu-24.04
             rid: linux-x64
             max-isa: AVX2
+            parallel: 2
           - os: ubuntu-24.04-arm
             rid: linux-arm64
             max-isa: NEON
+            parallel: 4
+          # `cmake-arch` feeds the Visual Studio generator's -A flag. Without it CMake picks
+          # the generator's default platform, which on the ARM64 runner is not ARM64: the
+          # build then compiled the x86 SIMD paths and immintrin.h rejected the target.
           - os: windows-latest
             rid: win-x64
             max-isa: AVX2
+            cmake-arch: x64
+            parallel: 4
           - os: windows-11-arm
             rid: win-arm64
             max-isa: NEON
+            cmake-arch: ARM64
+            parallel: 4
           - os: macos-latest
             rid: osx-arm64
             max-isa: NEON
+            parallel: 4
 
     steps:
       - name: Checkout Embree
@@ -60,6 +76,7 @@ jobs:
         shell: bash
         run: |
           cmake -S . -B build \
+            ${{ matrix.cmake-arch && format('-A {0}', matrix.cmake-arch) || '' }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DEMBREE_TASKING_SYSTEM=INTERNAL \
             -DEMBREE_ISPC_SUPPORT=OFF \
@@ -68,8 +85,15 @@ jobs:
             -DEMBREE_GEOMETRY_INSTANCE_ARRAY=ON \
             -DEMBREE_MAX_ISA=${{ matrix.max-isa }}
 
+      # Fail early and loudly if the ARM legs did not end up on the ARM code path: an x86
+      # SIMD build for an ARM target dies deep in the compiler with an unhelpful error.
+      - name: Check ARM detection
+        if: matrix.max-isa == 'NEON'
+        shell: bash
+        run: grep -q "EMBREE_ARM:.*=ON" build/CMakeCache.txt || (echo "EMBREE_ARM is not ON; CMake did not detect an ARM target" && grep -i "CMAKE_.*PROCESSOR\|CMAKE_GENERATOR_PLATFORM" build/CMakeCache.txt && exit 1)
+
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel ${{ matrix.parallel }}
 
       # On Linux and macOS CMake emits versioned names behind symlinks
       # (libembree4.so -> libembree4.so.4 -> libembree4.so.4.4.1). Symlinks do not survive
