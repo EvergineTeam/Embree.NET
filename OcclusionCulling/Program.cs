@@ -30,18 +30,28 @@ namespace OcclusionCulling
 		{
 			bool images = args.Contains("--images");
 
+			string sweep = args.FirstOrDefault(a => a.StartsWith("--sweep", StringComparison.Ordinal));
+			if (sweep != null)
+			{
+				if (sweep.Contains('='))
+				{
+					// A child, measuring exactly one size and printing its row.
+					Sweep(sweep.Split('=')[1].Split(',').Select(int.Parse).ToArray(), header: false);
+				}
+				else
+				{
+					SweepInChildProcesses(new[] { 10, 50, 100, 200, 500, 1000 });
+				}
+
+				return 0;
+			}
+
 			using var scene = new Scene(BoxCount, VolumeExtent, MinBoxSize, MaxBoxSize, Seed);
 
 			// Outside the cloud, looking at its centre, close enough that the near boxes hide
 			// much of what is behind them. That is the situation occlusion culling exists for.
 			float extent = VolumeExtent;
-			var camera = new Camera(
-				position: new Vector3(extent * 2.5f, extent * 1.4f, extent * 2.9f),
-				target: Vector3.Zero,
-				fovDegrees: 55.0f,
-				aspect: (float)CullWidth / CullHeight,
-				near: 0.1f,
-				far: extent * 20.0f);
+			var camera = MakeCamera(extent);
 
 			Console.WriteLine($"Scene          : {scene.BoxCount:N0} boxes scattered at random, sizes {MinBoxSize}..{MaxBoxSize}, {scene.TriangleCount:N0} triangles, one geometry each");
 			Console.WriteLine($"Logical cores  : {Environment.ProcessorCount}");
@@ -116,6 +126,113 @@ namespace OcclusionCulling
 
 			return 0;
 		}
+
+		/// <summary>
+		/// The same measurement at a range of scene sizes, to show how the cost scales.
+		/// </summary>
+		/// <remarks>
+		/// The volume grows with the cube root of the box count, so density stays constant and
+		/// the camera pulls back with it. Holding the volume fixed instead would vary two things
+		/// at once — how many objects there are and how much they occlude each other — and the
+		/// curve would not say which of them moved the cost.
+		/// </remarks>
+		/// <summary>
+		/// Runs each scene size in a process of its own and collects the rows.
+		/// </summary>
+		/// <remarks>
+		/// One process per size, which looks like overkill and is not. Measuring six scenes in a
+		/// row inside one process moved the later numbers by half: with EMBREE_TASKING_SYSTEM
+		/// =INTERNAL every rtcNewDevice brings its own worker threads, and six devices' worth of
+		/// them leaves the machine in a different state from the one the first measurement saw.
+		/// Measured alone, the thousand-box scene reports 0.21 ms; measured sixth, 0.33 ms. The
+		/// shape of the curve is the whole point of a sweep, so it cannot be built out of numbers
+		/// that drift with their position in the list.
+		/// </remarks>
+		private static void SweepInChildProcesses(int[] sizes)
+		{
+			Console.WriteLine("Constant density: the volume grows with the cube root of the box count.");
+			Console.WriteLine("Each size runs in its own process; see the remarks on SweepInChildProcesses.");
+			Console.WriteLine();
+			Console.WriteLine("boxes   frustum  per-object  per-object   visbuffer   visbuffer   culled   miss");
+			Console.WriteLine("                    single    8-packet      single    8-packet            screen");
+
+			foreach (int count in sizes)
+			{
+				var info = new ProcessStartInfo(Environment.ProcessPath)
+				{
+					RedirectStandardOutput = true,
+					UseShellExecute = false,
+				};
+
+				foreach (string argument in Environment.GetCommandLineArgs().Skip(1).Where(a => !a.StartsWith("--sweep", StringComparison.Ordinal)))
+				{
+					info.ArgumentList.Add(argument);
+				}
+
+				info.ArgumentList.Add($"--sweep={count}");
+
+				using var child = Process.Start(info);
+				Console.Write(child.StandardOutput.ReadToEnd());
+				child.WaitForExit();
+			}
+		}
+
+		private static void Sweep(int[] sizes, bool header)
+		{
+			if (header)
+			{
+				Console.WriteLine("boxes   frustum  per-object  per-object   visbuffer   visbuffer   culled   miss");
+				Console.WriteLine("                    single    8-packet      single    8-packet            screen");
+			}
+
+			foreach (int count in sizes)
+			{
+				float extent = VolumeExtent * MathF.Cbrt(count / (float)BoxCount);
+
+				using var scene = new Scene(count, extent, MinBoxSize, MaxBoxSize, Seed);
+				var camera = MakeCamera(extent);
+
+				var candidates = new int[count];
+				var visible = new bool[count];
+				var truth = new bool[count];
+
+				var truthIds = new uint[TruthWidth * TruthHeight];
+				Culling.VisibilityBufferSingle(scene, camera, TruthWidth, TruthHeight, truth, truthIds);
+
+				var pixelsPerBox = new long[count];
+				long coveredPixels = 0;
+				foreach (uint id in truthIds)
+				{
+					if (id != Embree_INVALID)
+					{
+						pixelsPerBox[id]++;
+						coveredPixels++;
+					}
+				}
+
+				var frustum = Measure("f", scene, camera, candidates, visible, truth, pixelsPerBox, coveredPixels,
+					(s, c, cand, n, vis) => { Array.Clear(vis); for (int i = 0; i < n; i++) { vis[cand[i]] = true; } return 0; });
+				var single = Measure("s", scene, camera, candidates, visible, truth, pixelsPerBox, coveredPixels,
+					(s, c, cand, n, vis) => Culling.PerObjectSingle(s, c, cand, n, vis));
+				var packet = Measure("p", scene, camera, candidates, visible, truth, pixelsPerBox, coveredPixels,
+					(s, c, cand, n, vis) => Culling.PerObjectPacket(s, c, cand, n, vis));
+				var buffer = Measure("b", scene, camera, candidates, visible, truth, pixelsPerBox, coveredPixels,
+					(s, c, cand, n, vis) => Culling.VisibilityBufferSingle(s, c, CullWidth, CullHeight, vis));
+				var bufferPacket = Measure("bp", scene, camera, candidates, visible, truth, pixelsPerBox, coveredPixels,
+					(s, c, cand, n, vis) => Culling.VisibilityBufferPacket(s, c, CullWidth, CullHeight, vis));
+
+				Console.WriteLine(
+					$"{count,5:N0} {frustum.Median,8:F4} {single.Median,11:F4} {packet.Median,11:F4} {buffer.Median,11:F4} {bufferPacket.Median,11:F4} {single.CulledPercent,8:F1}% {single.MissedScreenPercent,6:F2}%");
+			}
+		}
+
+		private static Camera MakeCamera(float extent) => new Camera(
+			position: new Vector3(extent * 2.5f, extent * 1.4f, extent * 2.9f),
+			target: Vector3.Zero,
+			fovDegrees: 55.0f,
+			aspect: (float)CullWidth / CullHeight,
+			near: 0.1f,
+			far: extent * 20.0f);
 
 		private delegate long Pass(Scene scene, Camera camera, int[] candidates, int candidateCount, bool[] visible);
 

@@ -57,6 +57,41 @@ cheaper and culls more (77% against 68%), but discards boxes holding 7.5% of the
 visibility buffer misses almost nothing — 0.15% — and is the one to reach for if popping matters
 more than the milliseconds.
 
+## How it scales
+
+`--sweep` repeats the measurement at 10, 50, 100, 200, 500 and 1,000 boxes, growing the volume
+with the cube root of the count so density stays constant and only the object count varies.
+
+```
+boxes   frustum  per-object  per-object   visbuffer   visbuffer   culled   miss
+                    single    8-packet      single    8-packet            screen
+   10   0.0001      0.0092      0.0111      0.6522      0.5490      0.0%   0.00%
+   50   0.0003      0.0203      0.0241      0.6140      0.5953     42.0%   7.87%
+  100   0.0005      0.0258      0.0431      0.6238      0.5538     43.0%   5.93%
+  200   0.0010      0.0487      0.0899      0.6219      0.6095     59.5%   4.97%
+  500   0.0017      0.1218      0.2098      0.5709      0.5541     72.6%   8.39%
+1,000   0.0030      0.2077      0.3377      0.5793      0.5372     77.1%   7.45%
+```
+
+![Cost against scene size](docs/scaling.png)
+
+The two families scale differently, which is the whole reason to have both. Per-object cost
+tracks the object count, from 0.009 ms at ten boxes to 0.21 ms at a thousand. The visibility
+buffer sits flat around 0.6 ms whatever the object count — it is paying for 57,600 rays and does
+not care how many things they hit. It even drifts slightly cheaper as boxes are added, because a
+denser scene stops rays sooner.
+
+So per-object wins by a wide margin up to about a thousand objects, and the curves are heading
+for a crossing somewhere past that. Below a few hundred boxes it is nearly free: at 200 objects
+the pass costs 0.05 ms and removes 60% of the draw calls.
+
+**Each size runs in its own process, and that is not fussiness.** Measuring all six in a row
+inside one process moved the later numbers by half — the thousand-box scene reports 0.21 ms
+measured alone and 0.33 ms measured sixth. With `EMBREE_TASKING_SYSTEM=INTERNAL` every
+`rtcNewDevice` brings its own worker threads, and six devices' worth leaves the machine in a
+different state from the one the first measurement saw. A sweep is about the shape of the curve,
+so it cannot be built from numbers that drift with their position in the list.
+
 ![Which boxes survived](docs/verdict.png)
 
 Green is a box the per-object pass kept, red one it discarded. Every red patch is a fragment
