@@ -6,6 +6,35 @@ namespace EmbreeGen
 {
 	internal class Program
 	{
+		private const string BindingProject = "Evergine.Bindings.Embree";
+
+		/// <summary>
+		/// Walks up from the executable looking for the binding project, and returns its Generated
+		/// folder. Counting "../" segments instead would break as soon as the depth changes: the CI
+		/// script runs the generator from bin/&lt;cfg&gt;/&lt;tfm&gt;/&lt;rid&gt;/publish/, one level deeper than a
+		/// local `dotnet run`, and the generator would happily write the bindings to the wrong
+		/// place without failing.
+		/// </summary>
+		private static bool TryFindBindingProject(out string generatedPath)
+		{
+			var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+			while (directory != null)
+			{
+				var candidate = Path.Combine(directory.FullName, BindingProject);
+				if (File.Exists(Path.Combine(candidate, $"{BindingProject}.csproj")))
+				{
+					generatedPath = Path.Combine(candidate, "Generated");
+					return true;
+				}
+
+				directory = directory.Parent;
+			}
+
+			generatedPath = null;
+			return false;
+		}
+
 		private static int Main(string[] args)
 		{
 			var headersDir = Path.Combine(AppContext.BaseDirectory, "Headers");
@@ -53,15 +82,19 @@ namespace EmbreeGen
 				Console.WriteLine($"  {message}");
 			}
 
-			// bin/<Configuration>/<tfm>/<rid>/ -> repository root
-			var outputPath = Path.GetFullPath(Path.Combine(
-				AppContext.BaseDirectory,
-				"..", "..", "..", "..", "..",
-				"Evergine.Bindings.Embree", "Generated"));
+			string outputPath;
 
 			if (args.Length > 0)
 			{
 				outputPath = Path.GetFullPath(args[0]);
+			}
+			else if (!TryFindBindingProject(out outputPath))
+			{
+				Console.Error.WriteLine(
+					$"Could not locate {BindingProject} above {AppContext.BaseDirectory}. " +
+					"Pass the output directory as the first argument.");
+
+				return 1;
 			}
 
 			Directory.CreateDirectory(outputPath);
