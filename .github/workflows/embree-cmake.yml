@@ -19,10 +19,18 @@ on:
         required: false
         type: string
         default: 'v4.4.1'
+      only-rid:
+        description: 'Build a single RID (e.g. win-arm64). Empty builds all five.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    # A single leg can be rebuilt on its own. Iterating on one platform otherwise means
+    # re-running win-x64, which takes an hour compiling four ISAs with MSVC.
+    if: inputs.only-rid == '' || inputs.only-rid == matrix.rid
     strategy:
       fail-fast: false
       matrix:
@@ -49,10 +57,16 @@ jobs:
             max-isa: AVX2
             cmake-arch: x64
             parallel: 4
+          # clang-cl rather than the MSVC toolset. Embree gates its ARM code path on
+          # __ARM_NEON and __aarch64__, which are GCC/Clang predefines; MSVC defines neither
+          # on ARM64 (it defines _M_ARM64), so it falls through to the x86 branch of
+          # common/sys/intrinsics.h and pulls in immintrin.h, which then rejects the target.
+          # Configuring correctly is not enough — that failure happens at compile time.
           - os: windows-11-arm
             rid: win-arm64
             max-isa: NEON
             cmake-arch: ARM64
+            toolset: ClangCL
             parallel: 4
           - os: macos-latest
             rid: osx-arm64
@@ -78,6 +92,7 @@ jobs:
           set -o pipefail
           cmake -S . -B build \
             ${{ matrix.cmake-arch && format('-A {0}', matrix.cmake-arch) || '' }} \
+            ${{ matrix.toolset && format('-T {0}', matrix.toolset) || '' }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DEMBREE_TASKING_SYSTEM=INTERNAL \
             -DEMBREE_ISPC_SUPPORT=OFF \
