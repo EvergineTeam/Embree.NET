@@ -1,0 +1,35 @@
+# Measures what a pull request does to the public contract, and merges the
+# binding updater's work when nothing anyone depends on has moved.
+#
+# Two questions, both invisible in a diff of thousands of generated lines: which
+# public symbols moved, and whether every P/Invoke still resolves in the four
+# native libraries this package ships.
+#
+# The second is not optional here and it is not a separate workflow. The agent
+# that opens these pull requests runs the generator, not the native build, so
+# regenerating against a newer header leaves the old binaries in place. That reads
+# as purely additive -- new symbols, none removed -- while every new symbol is
+# missing from the libraries. Folded into the gate, the merge depends on it.
+
+name: API Gate
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  api:
+    uses: EvergineTeam/Evergine.Bindings/.github/workflows/binding-api-gate.yml@v1
+    with:
+      binding-project: "Evergine.Bindings.Embree/Evergine.Bindings.Embree.csproj"
+      auto-merge: true
+      native-coherence: true
+      app-client-id: ${{ vars.APP_CLIENT_ID }}
+      # rtcore_config.h reports Embree's own version, so these five constants change
+      # on every release. The gate counts a changed constant value as a removal, on
+      # purpose -- that is how a silent renumbering gets caught -- which would make
+      # every bump "breaking" and the verdict worthless.
+      exempt-symbols: |
+        \.VERSION(_MAJOR|_MINOR|_PATCH|_STRING)? =
+    secrets:
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
