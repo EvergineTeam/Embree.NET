@@ -27,10 +27,52 @@ upstream:
     track: stable
     current: v4.4.1
 
+  # One entry per header rather than the directory, which is what this used to be. A
+  # directory source is compared by hashing everything under `path`, and this tree can
+  # never match upstream's: include/embree4 also carries eight .isph files for ISPC, which
+  # this binding does not use, and it carries a rtcore_config.h that upstream does not have
+  # (see the NOTE below). The comparison therefore reported "sources changed" on every run,
+  # even with the release sitting still — which fails the CD's native-coherence guard and
+  # would have the binding-updater open a pull request every month for nothing.
+  #
+  # Listed individually, each source is hashed as a single file, so what is not listed is
+  # simply not compared.
   sources:
     - repo: RenderKit/embree
-      remote-path: include/embree4
-      path: EmbreeGen/Headers/embree4
+      remote-path: include/embree4/rtcore.h
+      path: EmbreeGen/Headers/embree4/rtcore.h
+      format: c-header
+    - repo: RenderKit/embree
+      remote-path: include/embree4/rtcore_common.h
+      path: EmbreeGen/Headers/embree4/rtcore_common.h
+      format: c-header
+    - repo: RenderKit/embree
+      remote-path: include/embree4/rtcore_device.h
+      path: EmbreeGen/Headers/embree4/rtcore_device.h
+      format: c-header
+    - repo: RenderKit/embree
+      remote-path: include/embree4/rtcore_buffer.h
+      path: EmbreeGen/Headers/embree4/rtcore_buffer.h
+      format: c-header
+    - repo: RenderKit/embree
+      remote-path: include/embree4/rtcore_ray.h
+      path: EmbreeGen/Headers/embree4/rtcore_ray.h
+      format: c-header
+    - repo: RenderKit/embree
+      remote-path: include/embree4/rtcore_geometry.h
+      path: EmbreeGen/Headers/embree4/rtcore_geometry.h
+      format: c-header
+    - repo: RenderKit/embree
+      remote-path: include/embree4/rtcore_scene.h
+      path: EmbreeGen/Headers/embree4/rtcore_scene.h
+      format: c-header
+    - repo: RenderKit/embree
+      remote-path: include/embree4/rtcore_builder.h
+      path: EmbreeGen/Headers/embree4/rtcore_builder.h
+      format: c-header
+    - repo: RenderKit/embree
+      remote-path: include/embree4/rtcore_quaternion.h
+      path: EmbreeGen/Headers/embree4/rtcore_quaternion.h
       format: c-header
 
 generator:
