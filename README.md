@@ -77,7 +77,7 @@ HelloEmbree/                   Sample: CPU ray tracer drawn with the Evergine lo
 OcclusionCulling/              Sample: what a CPU occlusion culling pass costs
 ```
 
-[OcclusionCulling](OcclusionCulling/README.md) measures a visibility pass over a thousand boxes
+[OcclusionCulling](OcclusionCulling/README.md) measures a visibility pass over a thousand boxes scattered at random
 two ways — per-object rays and a visibility buffer — each with single rays and 8-wide packets,
 and reports both the cost and how much of the screen each one gets wrong. It is a console app
 with no dependencies, so unlike `HelloEmbree` it runs on every RID this package ships.

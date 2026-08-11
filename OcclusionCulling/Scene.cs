@@ -14,12 +14,21 @@ namespace OcclusionCulling
 	{
 		private Device device;
 
-		public Scene(int sideCount, float boxSize, float spacing)
+		/// <param name="boxCount">How many boxes to scatter.</param>
+		/// <param name="extent">Half the side of the cube they are scattered in.</param>
+		/// <param name="minSize">Smallest box edge.</param>
+		/// <param name="maxSize">Largest box edge.</param>
+		/// <param name="seed">
+		/// Fixed, and it has to be. The benchmark compares medians between runs, so the scene
+		/// must be the same scene every time; a clock-seeded layout would move the numbers around
+		/// and there would be no way to tell that from a real change.
+		/// </param>
+		public Scene(int boxCount, float extent, float minSize, float maxSize, int seed)
 		{
-			this.SideCount = sideCount;
-			this.BoxCount = sideCount * sideCount * sideCount;
-			this.Min = new Vector3[this.BoxCount];
-			this.Max = new Vector3[this.BoxCount];
+			this.BoxCount = boxCount;
+			this.Extent = extent;
+			this.Min = new Vector3[boxCount];
+			this.Max = new Vector3[boxCount];
 
 			this.device = Embree.NewDevice(null);
 			if (this.device.IsNull)
@@ -35,24 +44,27 @@ namespace OcclusionCulling
 			Embree.SetSceneFlags(this.Handle, SceneFlags.None);
 			Embree.SetSceneBuildQuality(this.Handle, BuildQuality.High);
 
-			float half = boxSize * 0.5f;
-			float step = boxSize * spacing;
-			float origin = -step * (sideCount - 1) * 0.5f;
+			// Scattered at random through the volume, each with its own size along each axis, so
+			// no two boxes are alike and nothing lines up. A regular grid makes occlusion culling
+			// look better than it is: every occluder is the same size and sits exactly behind the
+			// one in front, which is the easiest case there is.
+			var random = new Random(seed);
 
-			int index = 0;
-			for (int z = 0; z < sideCount; z++)
+			for (int i = 0; i < boxCount; i++)
 			{
-				for (int y = 0; y < sideCount; y++)
-				{
-					for (int x = 0; x < sideCount; x++)
-					{
-						var center = new Vector3(origin + (x * step), origin + (y * step), origin + (z * step));
-						this.Min[index] = center - new Vector3(half);
-						this.Max[index] = center + new Vector3(half);
-						this.AddBox(this.Min[index], this.Max[index]);
-						index++;
-					}
-				}
+				var centre = new Vector3(
+					Lerp(random, -extent, extent),
+					Lerp(random, -extent, extent),
+					Lerp(random, -extent, extent));
+
+				var half = new Vector3(
+					Lerp(random, minSize, maxSize),
+					Lerp(random, minSize, maxSize),
+					Lerp(random, minSize, maxSize)) * 0.5f;
+
+				this.Min[i] = centre - half;
+				this.Max[i] = centre + half;
+				this.AddBox(this.Min[i], this.Max[i]);
 			}
 
 			Embree.CommitScene(this.Handle);
@@ -83,8 +95,8 @@ namespace OcclusionCulling
 			: Embree.GetDeviceProperty(this.device, DeviceProperty.NativeRay4Supported) != 0 ? 4
 			: 1;
 
-		/// <summary>Gets the number of boxes per axis.</summary>
-		public int SideCount { get; }
+		/// <summary>Gets half the side of the cube the boxes are scattered in.</summary>
+		public float Extent { get; }
 
 		/// <summary>Gets the total number of boxes, which is also the number of geomIDs.</summary>
 		public int BoxCount { get; }
@@ -97,6 +109,9 @@ namespace OcclusionCulling
 
 		/// <summary>Gets the total triangle count.</summary>
 		public int TriangleCount => this.BoxCount * 12;
+
+		private static float Lerp(Random random, float min, float max) =>
+			min + ((max - min) * (float)random.NextDouble());
 
 		public void Dispose()
 		{

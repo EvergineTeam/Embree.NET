@@ -12,9 +12,11 @@ namespace OcclusionCulling
 	/// </summary>
 	internal static class Program
 	{
-		private const int SideCount = 10;                 // 10^3 = 1000 boxes
-		private const float BoxSize = 1.0f;
-		private const float Spacing = 1.8f;               // centre-to-centre, in box sizes
+		private const int BoxCount = 1000;
+		private const float VolumeExtent = 9.0f;          // half the side of the cube they fill
+		private const float MinBoxSize = 0.4f;
+		private const float MaxBoxSize = 2.4f;
+		private const int Seed = 20260811;                // fixed, so the scene is the same every run
 
 		private const int CullWidth = 320;                // resolution of the visibility-buffer pass
 		private const int CullHeight = 180;
@@ -28,11 +30,11 @@ namespace OcclusionCulling
 		{
 			bool images = args.Contains("--images");
 
-			using var scene = new Scene(SideCount, BoxSize, Spacing);
+			using var scene = new Scene(BoxCount, VolumeExtent, MinBoxSize, MaxBoxSize, Seed);
 
-			// Outside the grid, looking at its centre, close enough that the near faces hide
-			// most of the interior. That is the situation occlusion culling exists for.
-			float extent = BoxSize * Spacing * (SideCount - 1) * 0.5f;
+			// Outside the cloud, looking at its centre, close enough that the near boxes hide
+			// much of what is behind them. That is the situation occlusion culling exists for.
+			float extent = VolumeExtent;
 			var camera = new Camera(
 				position: new Vector3(extent * 2.5f, extent * 1.4f, extent * 2.9f),
 				target: Vector3.Zero,
@@ -41,7 +43,7 @@ namespace OcclusionCulling
 				near: 0.1f,
 				far: extent * 20.0f);
 
-			Console.WriteLine($"Scene          : {scene.BoxCount:N0} boxes ({SideCount}x{SideCount}x{SideCount}), {scene.TriangleCount:N0} triangles, one geometry each");
+			Console.WriteLine($"Scene          : {scene.BoxCount:N0} boxes scattered at random, sizes {MinBoxSize}..{MaxBoxSize}, {scene.TriangleCount:N0} triangles, one geometry each");
 			Console.WriteLine($"Logical cores  : {Environment.ProcessorCount}");
 			Console.WriteLine($"Widest packet  : {scene.MaxPacketWidth} rays (asked of the device, not assumed)");
 			Console.WriteLine();
@@ -237,21 +239,20 @@ namespace OcclusionCulling
 		private const uint Embree_INVALID = uint.MaxValue;
 
 		/// <summary>
-		/// A horizontal slice through the middle layer of the grid, seen from above. Boxes the
-		/// pass kept are bright, boxes it discarded are dark, and the camera is the cross.
+		/// A horizontal slab through the middle of the cloud, seen from above. Boxes the pass
+		/// kept are bright, boxes it discarded are dark, and the camera is the cross.
 		/// </summary>
 		/// <remarks>
-		/// One layer, not all ten. Projecting the whole grid onto the ground plane stacks every
-		/// layer into the same cell, so the picture would show one arbitrary layer's verdict and
-		/// look like the culling was deciding at random.
+		/// A slab rather than everything: projecting the whole cloud onto the ground plane piles
+		/// boxes from every height into the same pixels, and the picture would look like the
+		/// culling was deciding at random.
 		/// </remarks>
 		private static void WriteSlice(Scene scene, Camera camera, bool[] visible, string path)
 		{
 			const int Width = 720;
 			const int Height = 720;
 
-			float extent = BoxSize * Spacing * (SideCount - 1) * 0.5f;
-			float span = extent * 3.2f;
+			float span = scene.Extent * 3.2f;
 
 			var pixels = new byte[Width * Height * 3];
 			for (int i = 0; i < pixels.Length; i += 3)
@@ -259,13 +260,13 @@ namespace OcclusionCulling
 				pixels[i] = 18; pixels[i + 1] = 20; pixels[i + 2] = 26;
 			}
 
-			// Only the middle layer: geomIDs run x fastest, then y, then z.
-			int layer = SideCount / 2;
-			int perLayer = SideCount;
+			// Only boxes whose centre falls in the middle band of the volume.
+			float band = scene.Extent * 0.18f;
 
 			for (int box = 0; box < scene.BoxCount; box++)
 			{
-				if ((box / perLayer) % SideCount != layer)
+				float centreY = (scene.Min[box].Y + scene.Max[box].Y) * 0.5f;
+				if (MathF.Abs(centreY) > band)
 				{
 					continue;
 				}
