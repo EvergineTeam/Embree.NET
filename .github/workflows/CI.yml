@@ -1,5 +1,3 @@
-# Binding CI - Simple Template
-
 name: CI
 
 on:
@@ -17,13 +15,19 @@ on:
 
 jobs:
   ci:
-    uses: EvergineTeam/evergine-standards/.github/workflows/binding-common-ci.yml@v2
+    uses: EvergineTeam/Evergine.Bindings/.github/workflows/binding-common-ci.yml@v1
     with:
-      generator-project: "EmbreeGen/EmbreeGen.csproj"                                  # Path to the generator .csproj
-      generator-name: "EmbreeGen"                                                      # Generator executable name
-      binding-project: "Evergine.Bindings.Embree/Evergine.Bindings.Embree.csproj"      # Path to the binding .csproj
+      generator-project: "EmbreeGen/EmbreeGen.csproj"
+      generator-name: "EmbreeGen"
+      binding-project: "Evergine.Bindings.Embree/Evergine.Bindings.Embree.csproj"
       target-framework: "net10.0"
       dotnet-version: "10.x"
+      # Generation runs on Linux, which most of the fleet cannot do: the libclang in the
+      # CppAst package carries no system include paths and none of its own builtin headers,
+      # so <stddef.h> and <stdbool.h> fail to resolve there. This generator sidesteps that
+      # by parsing against the stubs in EmbreeGen/Headers/stubs with a pinned x86_64 target,
+      # which also makes its output identical on any host.
+      runner-os: ubuntu-latest
       runtime-identifier: "linux-x64"
       build-configuration: "Release"
       nuget-artifacts: ${{ inputs.publish-artifacts || false }}

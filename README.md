@@ -70,10 +70,18 @@ the 1-byte C `_Bool`.
 ## Repository layout
 
 ```
+binding.yml                    Manifest read by the Evergine.Bindings toolbox
 EmbreeGen/                     Generator console app (CppAst); vendored headers in Headers/
 Evergine.Bindings.Embree/      The NuGet package: Generated/ bindings + runtimes/ natives
 HelloEmbree/                   Sample: CPU ray tracer drawn with the Evergine low-level API
 ```
+
+CI and CD are the shared workflows from
+[EvergineTeam/Evergine.Bindings](https://github.com/EvergineTeam/Evergine.Bindings), and
+[`binding.yml`](binding.yml) is what tells them where the upstream headers come from, which
+release is tracked, and which paths are generated output. Read its `NOTE` comments before
+changing how the headers or the native binaries are refreshed — they record why the two cannot
+move independently.
 
 [HelloEmbree](HelloEmbree/README.md) traces a small scene on the CPU with
 `rtcIntersect1`/`rtcOccluded1`, uploads the result to a texture every frame and blits it to a

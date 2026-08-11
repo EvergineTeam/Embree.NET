@@ -1,8 +1,22 @@
-# Binding Simple CD - Template
+# Keeps this binding on the latest stable Embree release, headers and native libraries
+# together.
+#
+# Three jobs rather than one, because the two halves cannot share a runner: the native
+# libraries need a matrix across Linux, Windows and macOS, and the generator and packaging
+# need a single machine holding the whole tree.
+#
+# `resolve` runs first and alone so exactly one place decides which revision this run is
+# about. If the headers and the binaries each worked it out for themselves, a release
+# published midway through would leave them on different versions -- and that particular
+# mismatch is invisible: P/Invoke binds late, so the package compiles, passes CI, publishes,
+# and throws in the consumer's application.
 
 name: CD
 
 on:
+  schedule:
+    # Monthly, in step with the rest of the fleet.
+    - cron: '0 2 1 * *'
   workflow_dispatch:
     inputs:
       skip-assets-publishing:
@@ -10,11 +24,38 @@ on:
         required: false
         type: boolean
         default: false
+      force-natives:
+        description: 'Rebuild the native libraries even when the release has not moved'
+        required: false
+        type: boolean
+        default: false
+      force-publish:
+        description: 'Publish even when the generated code is unchanged'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  cd:
+  resolve:
     if: github.event_name != 'schedule' || github.ref == 'refs/heads/main'
-    uses: EvergineTeam/evergine-standards/.github/workflows/binding-simple-cd.yml@v2
+    uses: EvergineTeam/Evergine.Bindings/.github/workflows/binding-resolve-upstream.yml@v1
+
+  natives:
+    needs: resolve
+    # Four platform builds is not something to spend on a maybe, hence resolving first and
+    # asking. The x64 legs alone take about an hour.
+    if: needs.resolve.outputs.ref_moved == 'true' || inputs.force-natives
+    uses: ./.github/workflows/embree-cmake.yml
+    with:
+      ref: ${{ needs.resolve.outputs.resolved_ref }}
+
+  cd:
+    needs: [resolve, natives]
+    # `natives` is skipped whenever the release has not moved, and a skipped dependency
+    # would otherwise take this job with it. The run still has to reach the CD so it can
+    # report the no-op.
+    if: always() && needs.resolve.result == 'success' && needs.natives.result != 'failure' && !cancelled()
+    uses: EvergineTeam/Evergine.Bindings/.github/workflows/binding-tracked-cd.yml@v1
     with:
       generator-project: "EmbreeGen/EmbreeGen.csproj"
       generator-name: "EmbreeGen"
@@ -22,9 +63,20 @@ jobs:
       target-framework: "net10.0"
       dotnet-version: "10.x"
       nuget-version: "6.x"
+      # See CI.yml: this generator parses against its own stub headers, so unlike most of
+      # the fleet it does not need a Windows runner.
+      runner-os: ubuntu-latest
       runtime-identifier: "linux-x64"
       build-configuration: "Release"
       revision: ${{ github.run_number }}
+      # Every artifact already carries its final repository path, so unpacking them over the
+      # tree is the whole mapping.
+      #
+      # Asked for only when the natives job actually ran. It is skipped whenever the release
+      # has not moved -- most runs -- and asking for artifacts that were never produced fails
+      # the download and takes the publish with it.
+      natives-artifact-pattern: ${{ needs.natives.result == 'success' && 'natives-*' || '' }}
+      force-publish: ${{ inputs.force-publish || false }}
       publish-enabled: ${{ !inputs.skip-assets-publishing }}
       enable-email-notifications: true
     secrets:
