@@ -1,282 +1,421 @@
-using Evergine.Bindings.Embree;
+using Evergine.Common.Graphics;
+using Evergine.DirectX11;
+using Evergine.Forms;
 using System;
-using System.Runtime.InteropServices;
-using System.Text;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
 
 namespace HelloEmbree
 {
-	internal static unsafe class Program
+	/// <summary>
+	/// Renders an Embree CPU-raytraced scene through the Evergine low-level graphics API:
+	/// the ray tracer writes an RGBA buffer, which is uploaded to a texture every frame and
+	/// drawn to a DX11 swapchain with a fullscreen triangle. Around frame 10 the swapchain
+	/// color target is copied to a staging texture and saved as screenshot.png.
+	/// Pass --exit to close the app right after the screenshot (used for automation).
+	/// </summary>
+	internal static class Program
 	{
-		private static int Main()
+		private const uint Width = 800;
+		private const uint Height = 600;
+		private const int ScreenshotFrame = 10;
+		private const int BenchmarkWarmupFrames = 20;
+		private const int BenchmarkFrames = 100;
+
+		private const string ShaderSource = @"
+Texture2D DiffuseTexture : register(t0);
+SamplerState Sampler : register(s0);
+
+struct PS_IN
+{
+	float4 pos : SV_POSITION;
+	float2 tex : TEXCOORD;
+};
+
+PS_IN VS(uint id : SV_VertexID)
+{
+	PS_IN output = (PS_IN)0;
+	output.tex = float2((id << 1) & 2, id & 2);
+	output.pos = float4(output.tex * float2(2, -2) + float2(-1, 1), 0, 1);
+	return output;
+}
+
+float4 PS(PS_IN input) : SV_Target
+{
+	return DiffuseTexture.Sample(Sampler, input.tex);
+}
+";
+
+		private static GraphicsContext graphicsContext;
+		private static SwapChain swapChain;
+		private static CommandQueue commandQueue;
+		private static GraphicsPipelineState pipelineState;
+		private static ResourceSet resourceSet;
+		private static Texture rayTexture;
+		private static Viewport[] viewports;
+		private static Evergine.Mathematics.Rectangle[] scissors;
+
+		private static Raytracer raytracer;
+		private static byte[] pixels;
+		private static Stopwatch clock;
+		private static int frameIndex;
+		private static bool exitAfterScreenshot;
+		private static string screenshotPath;
+		private static bool benchmark;
+		private static double[] traceMs;
+		private static double[] uploadMs;
+		private static double[] gpuMs;
+		private static double sceneBuildMs;
+		private static MainForm form;
+		private static bool resizePending;
+		private static bool screenshotRequested;
+		private static float cameraTime;
+
+		[STAThread]
+		private static void Main(string[] args)
 		{
-			if (!CheckStructLayouts())
+			exitAfterScreenshot = args.Contains("--exit");
+			benchmark = args.Contains("--bench");
+			screenshotPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "screenshot.png");
+			screenshotPath = Path.GetFullPath(screenshotPath);
+
+			System.Windows.Forms.Application.EnableVisualStyles();
+			System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+
+			form = new MainForm((int)Width, (int)Height);
+			form.ScreenshotButton.Click += (s, e) => screenshotRequested = true;
+
+			// The HWND must exist before the swapchain is built, and it must be read *after* the
+			// control has been parented: WinForms recreates a control's handle when it is added to
+			// a container, which would leave the swapchain bound to a dead window.
+			form.CreateControl();
+			IntPtr renderHandle = form.RenderControl.Handle;
+
+			graphicsContext = new DX11GraphicsContext();
+			graphicsContext.CreateDevice();
+
+			var swapChainDescription = new SwapChainDescription()
 			{
-				return 1;
-			}
+				Width = (uint)form.RenderControl.ClientSize.Width,
+				Height = (uint)form.RenderControl.ClientSize.Height,
+				SurfaceInfo = new SurfaceInfo(renderHandle, SurfaceInfo.SurfaceTypes.Forms),
+				ColorTargetFormat = Evergine.Common.Graphics.PixelFormat.R8G8B8A8_UNorm,
+				ColorTargetFlags = TextureFlags.RenderTarget | TextureFlags.ShaderResource,
+				DepthStencilTargetFormat = Evergine.Common.Graphics.PixelFormat.D24_UNorm_S8_UInt,
+				DepthStencilTargetFlags = TextureFlags.DepthStencil,
+				SampleCount = TextureSampleCount.None,
+				IsWindowed = true,
+				RefreshRate = 60,
+			};
 
-			Device device = Embree.NewDevice(null);
-			if (device.IsNull)
-			{
-				Console.Error.WriteLine($"rtcNewDevice failed: {Embree.GetDeviceError(Device.Null)}");
-				return 1;
-			}
+			swapChain = graphicsContext.CreateSwapChain(swapChainDescription);
 
-			Embree.SetDeviceErrorFunction(device, &OnDeviceError, null);
-			Console.WriteLine($"Embree {Embree.VERSION_STRING} device created.");
+			// VSync would clamp the measured frame time to the display refresh rate.
+			swapChain.VerticalSync = !benchmark;
 
-			Scene scene = Embree.NewScene(device);
-			Geometry geometry = Embree.NewGeometry(device, GeometryType.Triangle);
+			form.RenderControl.ClientSizeChanged += (s, e) => resizePending = true;
 
-			// A single triangle in the z = 0 plane.
-			float* vertices = (float*)Embree.SetNewGeometryBuffer(
-				geometry, BufferType.Vertex, 0, Format.Float3, 3 * sizeof(float), 3);
-
-			vertices[0] = 0.0f; vertices[1] = 0.0f; vertices[2] = 0.0f;
-			vertices[3] = 1.0f; vertices[4] = 0.0f; vertices[5] = 0.0f;
-			vertices[6] = 0.0f; vertices[7] = 1.0f; vertices[8] = 0.0f;
-
-			uint* indices = (uint*)Embree.SetNewGeometryBuffer(
-				geometry, BufferType.Index, 0, Format.Uint3, 3 * sizeof(uint), 1);
-
-			indices[0] = 0; indices[1] = 1; indices[2] = 2;
-
-			Embree.CommitGeometry(geometry);
-			uint geomID = Embree.AttachGeometry(scene, geometry);
-			Embree.ReleaseGeometry(geometry);
-			Embree.CommitScene(scene);
-
-			if (!CheckError(device, "scene setup"))
-			{
-				return 1;
-			}
-
-			Console.WriteLine($"Triangle attached as geomID {geomID}, scene committed.");
-
-			bool ok = true;
-			ok &= ExpectHit(scene, origin: (0.25f, 0.25f, -1.0f), expectedGeomID: geomID);
-			ok &= ExpectMiss(scene, origin: (2.0f, 2.0f, -1.0f));
-			ok &= ExpectOccluded(scene, origin: (0.25f, 0.25f, -1.0f));
-			ok &= CheckError(device, "ray queries");
-
-			Embree.ReleaseScene(scene);
-			Embree.ReleaseDevice(device);
-
-			Console.WriteLine(ok ? "All checks passed." : "FAILED.");
-			return ok ? 0 : 1;
+			// Drive the render loop from the form itself, so it ends when the window is closed.
+			var windowSystem = new FormsWindowsSystem { AutoRegisterWindow = false };
+			windowSystem.RegisterLoopThreadControl(form);
+			windowSystem.Run(Load, Draw);
 		}
 
 		/// <summary>
-		/// The vendored rtcore_config.h has to match the configuration the native binaries were
-		/// built with, otherwise the struct layouts drift and every ray query reads garbage.
-		/// A size mismatch here is the cheapest way to catch that.
+		/// Matches the swapchain to the current size of the hosting control. The ray traced image
+		/// keeps its own fixed resolution and is stretched by the fullscreen triangle, so resizing
+		/// costs nothing on the CPU side.
 		/// </summary>
-		private static bool CheckStructLayouts()
+		private static void ApplyPendingResize()
 		{
-			bool ok = true;
+			resizePending = false;
 
-			// Expected values are the C sizeof for Embree 4.4.1 with RTC_MAX_INSTANCE_LEVEL_COUNT=1
-			// and RTC_GEOMETRY_INSTANCE_ARRAY defined. They include the tail padding that the
-			// RTC_ALIGN attributes add: RTCHit has 36 bytes of fields but is 48 bytes wide.
-			ok &= Expect("sizeof(Ray)", sizeof(Ray), 48);
-			ok &= Expect("sizeof(Hit)", sizeof(Hit), 48);
-			ok &= Expect("sizeof(RayHit)", sizeof(RayHit), sizeof(Ray) + sizeof(Hit));
-			ok &= Expect("sizeof(Ray4)", sizeof(Ray4), 4 * sizeof(Ray));
-			ok &= Expect("sizeof(Bounds)", sizeof(Bounds), 32);
-			ok &= Expect("sizeof(LinearBounds)", sizeof(LinearBounds), 64);
-			ok &= Expect("sizeof(PointQuery)", sizeof(PointQuery), 32);
-			ok &= Expect("sizeof(QuaternionDecomposition)", sizeof(QuaternionDecomposition), 64);
-			ok &= Expect("sizeof(IntersectArguments)", sizeof(IntersectArguments), 32);
+			uint width = (uint)Math.Max(form.RenderControl.ClientSize.Width, 1);
+			uint height = (uint)Math.Max(form.RenderControl.ClientSize.Height, 1);
 
-			if (!ok)
-			{
-				Console.Error.WriteLine(
-					"Struct layout mismatch: EmbreeGen/Headers/embree4/rtcore_config.h is out of sync " +
-					"with the native binaries in Evergine.Bindings.Embree/runtimes/.");
-			}
+			swapChain.ResizeSwapChain(width, height);
 
-			return ok;
+			viewports[0] = new Viewport(0, 0, width, height);
+			scissors[0] = new Evergine.Mathematics.Rectangle(0, 0, (int)width, (int)height);
 		}
 
-		private static bool Expect(string what, int actual, int expected)
+		private static void Load()
 		{
-			if (actual == expected)
-			{
-				return true;
-			}
+			long buildStart = Stopwatch.GetTimestamp();
+			raytracer = new Raytracer();
+			sceneBuildMs = ToMilliseconds(Stopwatch.GetTimestamp() - buildStart);
 
-			Console.Error.WriteLine($"  {what} = {actual}, expected {expected}");
-			return false;
+			pixels = new byte[Width * Height * 4];
+			clock = Stopwatch.StartNew();
+
+			traceMs = new double[BenchmarkFrames];
+			uploadMs = new double[BenchmarkFrames];
+			gpuMs = new double[BenchmarkFrames];
+
+			// CPU-writable render target for the ray traced image.
+			var textureDescription = new TextureDescription()
+			{
+				Type = TextureType.Texture2D,
+				Width = Width,
+				Height = Height,
+				Depth = 1,
+				ArraySize = 1,
+				MipLevels = 1,
+				Format = Evergine.Common.Graphics.PixelFormat.R8G8B8A8_UNorm,
+				Usage = ResourceUsage.Default,
+				CpuAccess = ResourceCpuAccess.None,
+				Flags = TextureFlags.ShaderResource,
+				SampleCount = TextureSampleCount.None,
+			};
+			rayTexture = graphicsContext.Factory.CreateTexture(ref textureDescription);
+
+			// Linear so the fixed-resolution ray traced image scales cleanly when the window is resized.
+			var samplerDescription = SamplerStates.LinearClamp;
+			var sampler = graphicsContext.Factory.CreateSamplerState(ref samplerDescription);
+
+			var vertexShaderDescription = new ShaderDescription(
+				ShaderStages.Vertex, "VS", graphicsContext.ShaderCompile(ShaderSource, "VS", ShaderStages.Vertex).ByteCode);
+			var pixelShaderDescription = new ShaderDescription(
+				ShaderStages.Pixel, "PS", graphicsContext.ShaderCompile(ShaderSource, "PS", ShaderStages.Pixel).ByteCode);
+			var vertexShader = graphicsContext.Factory.CreateShader(ref vertexShaderDescription);
+			var pixelShader = graphicsContext.Factory.CreateShader(ref pixelShaderDescription);
+
+			var resourceLayoutDescription = new ResourceLayoutDescription(
+				new LayoutElementDescription(0, ResourceType.TextureView, ShaderStages.Pixel),
+				new LayoutElementDescription(0, ResourceType.Sampler, ShaderStages.Pixel));
+			var resourceLayout = graphicsContext.Factory.CreateResourceLayout(ref resourceLayoutDescription);
+
+			var resourceSetDescription = new ResourceSetDescription(resourceLayout, rayTexture, sampler);
+			resourceSet = graphicsContext.Factory.CreateResourceSet(ref resourceSetDescription);
+
+			var pipelineDescription = new GraphicsPipelineDescription()
+			{
+				PrimitiveTopology = PrimitiveTopology.TriangleList,
+				InputLayouts = null,
+				ResourceLayouts = new[] { resourceLayout },
+				Shaders = new GraphicsShaderStateDescription()
+				{
+					VertexShader = vertexShader,
+					PixelShader = pixelShader,
+				},
+				RenderStates = new RenderStateDescription()
+				{
+					RasterizerState = RasterizerStates.CullBack,
+					BlendState = BlendStates.Opaque,
+					DepthStencilState = DepthStencilStates.None,
+				},
+				Outputs = swapChain.FrameBuffer.OutputDescription,
+			};
+			pipelineState = graphicsContext.Factory.CreateGraphicsPipeline(ref pipelineDescription);
+
+			commandQueue = graphicsContext.Factory.CreateCommandQueue();
+
+			viewports = new[] { new Viewport(0, 0, Width, Height) };
+			scissors = new[] { new Evergine.Mathematics.Rectangle(0, 0, (int)Width, (int)Height) };
+
+			form.SetSceneInfo(raytracer.TriangleCount, raytracer.GeometryCount, (int)Width, (int)Height);
+			ApplyPendingResize();
 		}
 
-		private static bool ExpectHit(Scene scene, (float X, float Y, float Z) origin, uint expectedGeomID)
+		private static void Draw()
 		{
-			RayHit* rayhit = AlignedAlloc<RayHit>();
-
-			try
+			if (resizePending)
 			{
-				*rayhit = MakeRayHit(origin);
+				ApplyPendingResize();
+			}
 
-				IntersectArguments args;
-				Embree.InitIntersectArguments(&args);
-				Embree.Intersect1(scene, rayhit, &args);
+			swapChain.InitFrame();
 
-				if (rayhit->Hit.GeomID != expectedGeomID)
+			// The camera is frozen while benchmarking so every frame traces the same image.
+			if (!benchmark && !form.AnimateButton.Checked)
+			{
+				cameraTime = (float)clock.Elapsed.TotalSeconds;
+			}
+
+			// 1. CPU ray tracing with Embree.
+			long t0 = Stopwatch.GetTimestamp();
+			raytracer.Render(pixels, (int)Width, (int)Height, cameraTime);
+			long t1 = Stopwatch.GetTimestamp();
+
+			// 2. Upload to the GPU texture.
+			graphicsContext.UpdateTextureData(rayTexture, pixels, 0);
+			long t2 = Stopwatch.GetTimestamp();
+
+			// 3. Fullscreen triangle to the swapchain.
+			var commandBuffer = commandQueue.CommandBuffer();
+			commandBuffer.Begin();
+			commandBuffer.SetViewports(viewports);
+			commandBuffer.SetScissorRectangles(scissors);
+
+			var renderPass = new RenderPassDescription(swapChain.FrameBuffer, new ClearValue(ClearFlags.All, Evergine.Common.Graphics.Color.Black));
+			commandBuffer.BeginRenderPass(ref renderPass);
+			commandBuffer.SetGraphicsPipelineState(pipelineState);
+			commandBuffer.SetResourceSet(resourceSet);
+			commandBuffer.Draw(3);
+			commandBuffer.EndRenderPass();
+
+			commandBuffer.End();
+			commandBuffer.Commit();
+			commandQueue.Submit();
+			commandQueue.WaitIdle();
+			long t3 = Stopwatch.GetTimestamp();
+
+			frameIndex++;
+
+			if (benchmark)
+			{
+				// The first frames pay JIT and lazy driver/BVH warm-up costs.
+				if (frameIndex > BenchmarkWarmupFrames)
 				{
-					Console.Error.WriteLine($"  expected a hit on geomID {expectedGeomID}, got {rayhit->Hit.GeomID}");
-					return false;
+					int i = frameIndex - BenchmarkWarmupFrames - 1;
+					traceMs[i] = ToMilliseconds(t1 - t0);
+					uploadMs[i] = ToMilliseconds(t2 - t1);
+					gpuMs[i] = ToMilliseconds(t3 - t2);
 				}
 
-				float u = rayhit->Hit.U;
-				float v = rayhit->Hit.V;
-
-				Console.WriteLine(
-					$"  hit: geomID={rayhit->Hit.GeomID} primID={rayhit->Hit.PrimID} " +
-					$"u={u:F3} v={v:F3} tfar={rayhit->Ray.Tfar:F3} " +
-					$"Ng=({rayhit->Hit.NgX:F1}, {rayhit->Hit.NgY:F1}, {rayhit->Hit.NgZ:F1})");
-
-				if (u < 0.0f || v < 0.0f || u + v > 1.0f)
+				if (frameIndex == BenchmarkWarmupFrames + BenchmarkFrames)
 				{
-					Console.Error.WriteLine($"  barycentric coordinates out of range: u={u} v={v}");
-					return false;
+					SaveScreenshot();
+					ReportBenchmark();
+					Environment.Exit(0);
 				}
 
-				return true;
+				swapChain.Present();
+				return;
 			}
-			finally
+
+			form.SetTimings(ToMilliseconds(t1 - t0), ToMilliseconds(t2 - t1), ToMilliseconds(t3 - t2));
+
+			if (frameIndex == ScreenshotFrame || screenshotRequested)
 			{
-				NativeMemory.AlignedFree(rayhit);
+				screenshotRequested = false;
+				SaveScreenshot();
+
+				if (exitAfterScreenshot)
+				{
+					Environment.Exit(0);
+				}
 			}
+
+			swapChain.Present();
 		}
 
-		private static bool ExpectMiss(Scene scene, (float X, float Y, float Z) origin)
+		private static double ToMilliseconds(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
+
+		private static void ReportBenchmark()
 		{
-			RayHit* rayhit = AlignedAlloc<RayHit>();
+			Array.Sort(traceMs);
+			var upload = (double[])uploadMs.Clone();
+			var gpu = (double[])gpuMs.Clone();
+			Array.Sort(upload);
+			Array.Sort(gpu);
 
-			try
-			{
-				*rayhit = MakeRayHit(origin);
+			long pixelCount = (long)Width * Height;
 
-				IntersectArguments args;
-				Embree.InitIntersectArguments(&args);
-				Embree.Intersect1(scene, rayhit, &args);
+			Console.WriteLine();
+			Console.WriteLine($"Resolution     : {Width}x{Height} ({pixelCount:N0} primary rays + 1 shadow ray per hit)");
+			Console.WriteLine($"Triangles      : {raytracer.TriangleCount:N0} in {raytracer.GeometryCount} geometries");
+			Console.WriteLine($"Logical cores  : {Environment.ProcessorCount}");
+			Console.WriteLine($"Scene build    : {sceneBuildMs:F2} ms (geometry upload + rtcCommitScene BVH)");
+			Console.WriteLine($"Frames measured: {BenchmarkFrames} (after {BenchmarkWarmupFrames} warm-up frames)");
+			Console.WriteLine();
+			Console.WriteLine("Stage                    min       median       mean        max");
+			Console.WriteLine($"Embree CPU trace   {Min(traceMs),8:F2} ms {Median(traceMs),8:F2} ms {Mean(traceMs),8:F2} ms {Max(traceMs),8:F2} ms");
+			Console.WriteLine($"Texture upload     {Min(upload),8:F2} ms {Median(upload),8:F2} ms {Mean(upload),8:F2} ms {Max(upload),8:F2} ms");
+			Console.WriteLine($"GPU draw + sync    {Min(gpu),8:F2} ms {Median(gpu),8:F2} ms {Mean(gpu),8:F2} ms {Max(gpu),8:F2} ms");
+			Console.WriteLine();
 
-				if (rayhit->Hit.GeomID != Embree.INVALID_GEOMETRY_ID)
-				{
-					Console.Error.WriteLine($"  expected a miss, got geomID {rayhit->Hit.GeomID}");
-					return false;
-				}
-
-				Console.WriteLine("  miss: geomID=INVALID_GEOMETRY_ID");
-				return true;
-			}
-			finally
-			{
-				NativeMemory.AlignedFree(rayhit);
-			}
+			double medianTrace = Median(traceMs);
+			double medianTotal = medianTrace + Median(upload) + Median(gpu);
+			Console.WriteLine($"Image generation (trace only) : {medianTrace:F2} ms  ->  {1000.0 / medianTrace:F1} fps, {pixelCount / medianTrace / 1000.0:F2} Mrays/s");
+			Console.WriteLine($"Full frame (trace+upload+GPU) : {medianTotal:F2} ms  ->  {1000.0 / medianTotal:F1} fps");
 		}
 
-		private static bool ExpectOccluded(Scene scene, (float X, float Y, float Z) origin)
+		private static double Min(double[] sorted) => sorted[0];
+
+		private static double Max(double[] sorted) => sorted[sorted.Length - 1];
+
+		private static double Median(double[] sorted) => sorted.Length % 2 == 1
+			? sorted[sorted.Length / 2]
+			: (sorted[(sorted.Length / 2) - 1] + sorted[sorted.Length / 2]) * 0.5;
+
+		private static double Mean(double[] values)
 		{
-			Ray* ray = AlignedAlloc<Ray>();
-
-			try
+			double sum = 0.0;
+			foreach (double value in values)
 			{
-				*ray = MakeRay(origin);
-
-				OccludedArguments args;
-				Embree.InitOccludedArguments(&args);
-				Embree.Occluded1(scene, ray, &args);
-
-				// rtcOccluded1 signals occlusion by setting tfar to -infinity.
-				if (!float.IsNegativeInfinity(ray->Tfar))
-				{
-					Console.Error.WriteLine($"  expected an occluded ray, tfar is {ray->Tfar}");
-					return false;
-				}
-
-				Console.WriteLine("  occluded: tfar=-inf");
-				return true;
+				sum += value;
 			}
-			finally
-			{
-				NativeMemory.AlignedFree(ray);
-			}
+
+			return sum / values.Length;
 		}
 
 		/// <summary>
-		/// Allocates a single ray structure with the alignment Embree requires.
+		/// Copies the swapchain color target into a CPU-readable staging texture and saves it
+		/// as a PNG (same staging+map pattern as Evergine's SnapShoter).
 		/// </summary>
-		/// <remarks>
-		/// This is not optional. Embree's traversal kernels use aligned SIMD loads on the ray
-		/// structures, and a C# local or array element carries no alignment guarantee beyond the
-		/// pointer size, so passing <c>&amp;someLocal</c> crashes on some code paths and silently
-		/// works on others. RTCRay/RTCRayHit need 16 bytes, RTCRay8 needs 32 and RTCRay16 needs 64;
-		/// the C alignment of every generated struct is recorded above its declaration in
-		/// Generated/Structs.cs.
-		/// </remarks>
-		private static T* AlignedAlloc<T>()
-			where T : unmanaged
+		private static unsafe void SaveScreenshot()
 		{
-			return (T*)NativeMemory.AlignedAlloc((nuint)sizeof(T), 64);
-		}
+			Texture source = swapChain.FrameBuffer.ColorTargets[0].Texture;
 
-		private static Ray MakeRay((float X, float Y, float Z) origin)
-		{
-			Ray ray = default;
-			ray.OrgX = origin.X;
-			ray.OrgY = origin.Y;
-			ray.OrgZ = origin.Z;
-			ray.DirX = 0.0f;
-			ray.DirY = 0.0f;
-			ray.DirZ = 1.0f;
-			ray.Tnear = 0.0f;
-			ray.Tfar = float.PositiveInfinity;
-			ray.Mask = uint.MaxValue;
-			ray.Flags = 0;
-			return ray;
-		}
+			// The swapchain follows the control size, which is not the ray tracing resolution.
+			int width = (int)source.Description.Width;
+			int height = (int)source.Description.Height;
 
-		private static RayHit MakeRayHit((float X, float Y, float Z) origin)
-		{
-			RayHit rayhit = default;
-			rayhit.Ray = MakeRay(origin);
-			rayhit.Hit.GeomID = Embree.INVALID_GEOMETRY_ID;
-			rayhit.Hit.PrimID = Embree.INVALID_GEOMETRY_ID;
-			return rayhit;
-		}
+			var stagingDescription = source.Description;
+			stagingDescription.Flags = TextureFlags.None;
+			stagingDescription.CpuAccess = ResourceCpuAccess.Read;
+			stagingDescription.Usage = ResourceUsage.Staging;
+			var staging = graphicsContext.Factory.CreateTexture(ref stagingDescription);
 
-		private static bool CheckError(Device device, string stage)
-		{
-			Error error = Embree.GetDeviceError(device);
-			if (error == Error.None)
+			var commandBuffer = commandQueue.CommandBuffer();
+			commandBuffer.Begin();
+			commandBuffer.CopyTextureDataTo(source, staging);
+			commandBuffer.End();
+			commandBuffer.Commit();
+			commandQueue.Submit();
+			commandQueue.WaitIdle();
+
+			MappedResource mapped = graphicsContext.MapMemory(staging, MapMode.Read);
+
+			try
 			{
-				return true;
+				using var bitmap = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+				var bitmapData = bitmap.LockBits(
+					new System.Drawing.Rectangle(0, 0, width, height),
+					System.Drawing.Imaging.ImageLockMode.WriteOnly,
+					System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+				try
+				{
+					for (int y = 0; y < height; y++)
+					{
+						byte* sourceRow = (byte*)mapped.Data + (y * mapped.RowPitch);
+						byte* destinationRow = (byte*)bitmapData.Scan0 + (y * bitmapData.Stride);
+
+						for (int x = 0; x < width; x++)
+						{
+							// Swapchain is RGBA, GDI+ expects BGRA.
+							destinationRow[(x * 4) + 0] = sourceRow[(x * 4) + 2];
+							destinationRow[(x * 4) + 1] = sourceRow[(x * 4) + 1];
+							destinationRow[(x * 4) + 2] = sourceRow[(x * 4) + 0];
+							destinationRow[(x * 4) + 3] = 255;
+						}
+					}
+				}
+				finally
+				{
+					bitmap.UnlockBits(bitmapData);
+				}
+
+				bitmap.Save(screenshotPath, System.Drawing.Imaging.ImageFormat.Png);
+				Console.WriteLine($"Screenshot saved to {screenshotPath}");
 			}
-
-			Console.Error.WriteLine($"  Embree error after {stage}: {error}");
-			return false;
-		}
-
-		[UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-		private static void OnDeviceError(void* userPtr, Error code, byte* message)
-		{
-			Console.Error.WriteLine($"  [embree] {code}: {Utf8ToString(message)}");
-		}
-
-		private static string Utf8ToString(byte* text)
-		{
-			if (text == null)
+			finally
 			{
-				return string.Empty;
+				graphicsContext.UnmapMemory(staging);
 			}
-
-			int length = 0;
-			while (text[length] != 0)
-			{
-				length++;
-			}
-
-			return Encoding.UTF8.GetString(text, length);
 		}
 	}
 }

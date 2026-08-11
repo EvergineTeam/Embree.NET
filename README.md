@@ -68,16 +68,16 @@ the 1-byte C `_Bool`.
 ```
 EmbreeGen/                     Generator console app (CppAst); vendored headers in Headers/
 Evergine.Bindings.Embree/      The NuGet package: Generated/ bindings + runtimes/ natives
-HelloEmbree/                   Console sample and smoke test
-HelloEmbree.Evergine/          CPU ray tracer drawn with the Evergine low-level graphics API
+HelloEmbree/                   Sample: CPU ray tracer drawn with the Evergine low-level API
 ```
 
-[HelloEmbree.Evergine](HelloEmbree.Evergine/README.md) traces a small scene on the CPU with
+[HelloEmbree](HelloEmbree/README.md) traces a small scene on the CPU with
 `rtcIntersect1`/`rtcOccluded1`, uploads the result to a texture every frame and blits it to a
 DX11 swapchain hosted in a Windows Forms window. It also has a `--bench` mode that reports the
-cost of each stage.
+cost of each stage. Being a WinForms + DX11 app it only runs on Windows, even though the binding
+itself targets every supported RID.
 
-![The Evergine sample running](HelloEmbree.Evergine/docs/window.png)
+![The sample running](HelloEmbree/docs/window.png)
 
 Regenerate the bindings after changing a header with:
 

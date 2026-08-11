@@ -1,4 +1,4 @@
-# HelloEmbree.Evergine
+# HelloEmbree
 
 CPU ray tracing with `Evergine.Bindings.Embree`, presented through the **Evergine low-level
 graphics API** — no Evergine Framework, no scene graph, just `GraphicsContext`, `SwapChain`,
@@ -64,7 +64,7 @@ The sample needs the native Embree library. It is **not** committed to this repo
 > `EMBREE_TASKING_SYSTEM=INTERNAL`, which removes the dependency entirely.
 
 ```bash
-dotnet run --project HelloEmbree.Evergine -c Release
+dotnet run --project HelloEmbree -c Release
 ```
 
 Options:
