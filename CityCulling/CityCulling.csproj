@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net10.0-windows</TargetFramework>
+		<UseWindowsForms>true</UseWindowsForms>
+		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+		<Nullable>disable</Nullable>
+		<RootNamespace>CityCulling</RootNamespace>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Evergine.Bindings.Embree\Evergine.Bindings.Embree.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Evergine.Common" Version="2026.5.26.1667" />
+		<PackageReference Include="Evergine.Mathematics" Version="2026.5.26.1667" />
+		<PackageReference Include="Evergine.DirectX11" Version="2026.5.26.1667" />
+		<PackageReference Include="Evergine.Forms" Version="2026.5.26.1667" />
+	</ItemGroup>
+
+</Project>

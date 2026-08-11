@@ -9,3 +9,9 @@ HelloEmbree/screenshot.png
 OcclusionCulling/scene.png
 OcclusionCulling/verdict.png
 OcclusionCulling/slice.png
+
+# Captures the CityCulling sample writes at runtime (docs/ holds the committed ones).
+CityCulling/city.png
+CityCulling/culled.png
+CityCulling/topdown.png
+CityCulling/embree.png

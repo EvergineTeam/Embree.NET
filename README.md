@@ -75,7 +75,14 @@ EmbreeGen/                     Generator console app (CppAst); vendored headers 
 Evergine.Bindings.Embree/      The NuGet package: Generated/ bindings + runtimes/ natives
 HelloEmbree/                   Sample: CPU ray tracer drawn with the Evergine low-level API
 OcclusionCulling/              Sample: what a CPU occlusion culling pass costs
+CityCulling/                   Sample: a city culled with Embree, drawn with the low-level API
 ```
+
+[CityCulling](CityCulling/README.md) is the two halves put together: a thousand buildings drawn
+through the Evergine low-level API, with Embree deciding each frame which of them reach the GPU. At
+street level it issues 56 draw calls instead of 1000.
+
+![The city](CityCulling/docs/city.png)
 
 [OcclusionCulling](OcclusionCulling/README.md) measures a visibility pass over a thousand boxes scattered at random
 two ways — per-object rays and a visibility buffer — each with single rays and 8-wide packets,
