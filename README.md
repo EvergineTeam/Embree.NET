@@ -74,19 +74,7 @@ binding.yml                    Manifest read by the Evergine.Bindings toolbox
 EmbreeGen/                     Generator console app (CppAst); vendored headers in Headers/
 Evergine.Bindings.Embree/      The NuGet package: Generated/ bindings + runtimes/ natives
 HelloEmbree/                   Sample: CPU ray tracer drawn with the Evergine low-level API
-CityCulling/                   Sample: a city culled with Embree, drawn with the low-level API
 ```
-
-[CityCulling](CityCulling/README.md) is the two halves put together: a thousand buildings drawn
-through the Evergine low-level API, with Embree deciding each frame which of them reach the GPU. At
-street level it issues 56 draw calls instead of 1000. Its `--bench` mode reports what the pass
-costs — and, next to it, what the frame costs without the pass at all, which in that scene is
-less.
-
-![The city](CityCulling/docs/city.png)
-
-Both samples are WinForms + DX11, so they only run on Windows; the binding itself targets every
-RID this package ships.
 
 CI and CD are the shared workflows from
 [EvergineTeam/Evergine.Bindings](https://github.com/EvergineTeam/Evergine.Bindings), and
@@ -98,7 +86,8 @@ move independently.
 [HelloEmbree](HelloEmbree/README.md) traces a small scene on the CPU with
 `rtcIntersect1`/`rtcOccluded1`, uploads the result to a texture every frame and blits it to a
 DX11 swapchain hosted in a Windows Forms window. It also has a `--bench` mode that reports the
-cost of each stage.
+cost of each stage. Being WinForms + DX11 it only runs on Windows, even though the binding itself
+targets every RID this package ships.
 
 ![The sample running](HelloEmbree/docs/window.png)
 

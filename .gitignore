@@ -4,9 +4,3 @@
 
 # Screenshot produced by the sample at runtime (docs/ holds the committed ones).
 HelloEmbree/screenshot.png
-
-# Captures the CityCulling sample writes at runtime (docs/ holds the committed ones).
-CityCulling/city.png
-CityCulling/culled.png
-CityCulling/topdown.png
-CityCulling/embree.png
