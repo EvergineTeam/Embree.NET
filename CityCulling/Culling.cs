@@ -12,11 +12,11 @@ namespace CityCulling
 	/// in the city hides it.
 	/// </summary>
 	/// <remarks>
-	/// Per-object rays with a single-ray query, which is what the OcclusionCulling benchmark in
-	/// this repository picked as the winner. On a thousand objects it came out at about 0.2 ms
-	/// against 0.6 ms for a visibility buffer, and it discarded more. Packets lost here because
-	/// filling eight lanes means giving up the early exit, and rays aimed at eight different
-	/// buildings diverge immediately, which is the case packet traversal is worst at.
+	/// Per-object rays with a single-ray query. Benchmarked against a screen-space visibility
+	/// buffer on a thousand objects, this came out at about 0.2 ms against 0.6 ms, and discarded
+	/// more. Eight-wide packets lost too: filling eight lanes means giving up the early exit, and
+	/// rays aimed at eight different buildings diverge immediately, which is the case packet
+	/// traversal is worst at.
 	/// </remarks>
 	internal static unsafe class Culling
 	{

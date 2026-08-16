@@ -19,11 +19,10 @@ nothing left to cull.
    sample that gets through.
 3. **One draw call per visible object.**
 
-The occlusion strategy is the winner from the
-[OcclusionCulling](../OcclusionCulling/README.md) benchmark in this repository: per-object rays,
-single-ray queries. There it came out three times cheaper than a visibility buffer and discarded
-more; packets lost because filling eight lanes gives up the early exit and rays aimed at eight
-different buildings diverge immediately.
+Per-object rays with single-ray queries, which is the strategy that won a benchmark against the
+alternatives: it came out three times cheaper than a screen-space visibility buffer and discarded
+more, and eight-wide packets lost because filling eight lanes gives up the early exit and rays
+aimed at eight different buildings diverge immediately — the case packet traversal is worst at.
 
 ## Results at the capture angle
 
@@ -143,5 +142,4 @@ The window orbits the city; the status bar shows draw calls, cull percentage, cu
 frame time. The toolbar can pause the camera, tint the discarded objects red, and write the
 captures. `--capture --exit` writes them at a fixed angle and quits.
 
-Windows only: this one is WinForms plus DX11. The binding itself runs on every RID it ships for,
-and `OcclusionCulling` is the cross-platform sample.
+Windows only: this one is WinForms plus DX11. The binding itself runs on every RID it ships for.

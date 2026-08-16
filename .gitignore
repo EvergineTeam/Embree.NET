@@ -5,11 +5,6 @@
 # Screenshot produced by the sample at runtime (docs/ holds the committed ones).
 HelloEmbree/screenshot.png
 
-# Images the sample writes at runtime (docs/ holds the committed ones).
-OcclusionCulling/scene.png
-OcclusionCulling/verdict.png
-OcclusionCulling/slice.png
-
 # Captures the CityCulling sample writes at runtime (docs/ holds the committed ones).
 CityCulling/city.png
 CityCulling/culled.png
