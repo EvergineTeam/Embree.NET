@@ -108,3 +108,4 @@ fails loudly instead of corrupting memory.
 - [RenderDoc.NET](https://github.com/EvergineTeam/RenderDoc.NET) — Bindings for RenderDoc
 - [XAtlas.NET](https://github.com/EvergineTeam/XAtlas.NET) — Bindings for xatlas
 - [MuJoCo.NET](https://github.com/EvergineTeam/MuJoCo.NET) — Bindings for MuJoCo
+- [Thorvg.NET](https://github.com/EvergineTeam/Thorvg.NET) — Bindings for ThorVG
